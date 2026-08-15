@@ -49,6 +49,27 @@ DEFAULT_DISPLAY_BACKEND = "auto"      # auto | wlopm | xset | wlr-randr | …
 DEFAULT_DISPLAY_OUTPUT = "auto"       # auto | HDMI-A-1 | HDMI-1 | …
 DEFAULT_DISPLAY_ROTATE = "normal"     # normal | left | right | inverted
 
+# How the panel is actually switched off. Combines with commas like
+# display_backend does, so "pwm,hdmi" ramps the backlight down *and* drops the
+# output. "hdmi" keeps the existing autodetected behaviour unchanged.
+#   hdmi | pwm | css | none
+DEFAULT_DISPLAY_OFF_STRATEGY = "hdmi"
+
+# --- PWM backlight (opt-in; needs a dtoverlay and a wire) ---
+# The one documented exception to preferring autodetection: which pin carries
+# the backlight signal depends entirely on how the user wired their board, so
+# there is nothing to detect. See presence/pwm.py for the tap.
+DEFAULT_PWM_GPIO = 18                 # BCM; hardware PWM on 12, 13, 18 or 19
+DEFAULT_PWM_FREQUENCY_HZ = 2000       # below ~200 Hz the flicker is visible
+DEFAULT_PWM_GAMMA = 2.2               # perceived brightness ≈ duty^(1/2.2)
+DEFAULT_PWM_MIN_DUTY_PERCENT = 3      # many LED drivers cut out below ~2–5%
+DEFAULT_PWM_FADE_MS = 800             # ramp rather than step
+DEFAULT_PWM_ENABLE_GPIO = -1          # BL_EN hard off; -1 means not wired
+DEFAULT_PWM_ENABLE_ACTIVE_HIGH = True
+
+# --- Brightness (single perceptual 0–100 value; see presence/panel.py) ---
+DEFAULT_BRIGHTNESS = 100              # normal, awake brightness
+
 # --- Schedule (display stays dark outside this window when enabled) ---
 DEFAULT_SCHEDULE_ENABLED = False
 DEFAULT_SCHEDULE_START = "06:30"

@@ -30,7 +30,7 @@ if _ROOT not in sys.path:
 import config                                    # noqa: E402
 import database                                  # noqa: E402
 from presence import runtime                     # noqa: E402
-from presence.display import DisplayController   # noqa: E402
+from presence.panel import PanelController       # noqa: E402
 from presence import ld2410                      # noqa: E402
 
 logger = logging.getLogger("wallcal.presence")
@@ -68,6 +68,13 @@ def _as_int(value, default=0) -> int:
         return default
 
 
+def _as_float(value, default=0.0) -> float:
+    try:
+        return float(str(value).strip())
+    except (TypeError, ValueError):
+        return default
+
+
 class Settings:
     """Typed snapshot of the presence-relevant settings."""
 
@@ -100,6 +107,23 @@ class Settings:
                                          config.DEFAULT_PRESENCE_CONFIRM_MS))
         self.display_backend = str(g("display_backend", "auto") or "auto")
         self.display_output = str(g("display_output", "auto") or "auto")
+        self.off_strategy = str(g("display_off_strategy")
+                                or config.DEFAULT_DISPLAY_OFF_STRATEGY)
+
+        self.pwm_gpio = _as_int(g("pwm_gpio"), config.DEFAULT_PWM_GPIO)
+        self.pwm_frequency_hz = _as_int(g("pwm_frequency_hz"),
+                                        config.DEFAULT_PWM_FREQUENCY_HZ)
+        self.pwm_gamma = _as_float(g("pwm_gamma"), config.DEFAULT_PWM_GAMMA)
+        self.pwm_min_duty_percent = _as_float(g("pwm_min_duty_percent"),
+                                              config.DEFAULT_PWM_MIN_DUTY_PERCENT)
+        self.pwm_fade_ms = max(0, _as_int(g("pwm_fade_ms"),
+                                          config.DEFAULT_PWM_FADE_MS))
+        self.pwm_enable_gpio = _as_int(g("pwm_enable_gpio"),
+                                       config.DEFAULT_PWM_ENABLE_GPIO)
+        self.pwm_enable_active_high = _as_bool(g("pwm_enable_active_high"), True)
+
+        self.brightness = max(0, min(100, _as_int(g("brightness"),
+                                                  config.DEFAULT_BRIGHTNESS)))
 
         self.schedule_enabled = _as_bool(g("schedule_enabled"), False)
         self.schedule_start = str(g("schedule_start") or config.DEFAULT_SCHEDULE_START)
@@ -110,8 +134,23 @@ class Settings:
         return (self.sensor_mode, self.gpio_pin, self.gpio_active_high,
                 self.uart_port, self.uart_baud)
 
+    # Changing any of these means the panel must be rebuilt — a new strategy,
+    # a different backend, or PWM hardware that has to be re-exported.
     def display_signature(self) -> tuple:
-        return (self.display_backend, self.display_output)
+        return (self.display_backend, self.display_output, self.off_strategy,
+                self.pwm_gpio, self.pwm_frequency_hz, self.pwm_gamma,
+                self.pwm_min_duty_percent, self.pwm_enable_gpio,
+                self.pwm_enable_active_high)
+
+    def pwm_kwargs(self) -> dict:
+        return {
+            "pin": self.pwm_gpio,
+            "frequency_hz": self.pwm_frequency_hz,
+            "gamma": self.pwm_gamma,
+            "min_duty_percent": self.pwm_min_duty_percent,
+            "enable_pin": self.pwm_enable_gpio,
+            "enable_active_high": self.pwm_enable_active_high,
+        }
 
     # The sensor-side hold is a constant now, so only the range matters here.
     def gate_signature(self) -> tuple:
@@ -403,7 +442,7 @@ class PresenceDaemon:
     def __init__(self):
         self.settings = Settings.load()
         self.sensor: SensorSource | None = None
-        self.display: DisplayController | None = None
+        self.display: PanelController | None = None
 
         self._stop = threading.Event()
         self._started_at = time.time()
@@ -475,10 +514,15 @@ class PresenceDaemon:
     def _connect_display(self, force: bool = False) -> None:
         signature = self.settings.display_signature()
         if self.display is None or force or getattr(self, "_display_sig", None) != signature:
-            self.display = DisplayController(
+            if self.display is not None:
+                self.display.close()
+            self.display = PanelController(
+                strategy=self.settings.off_strategy,
                 backend_spec=self.settings.display_backend,
                 output=self.settings.display_output,
+                pwm_settings=self.settings.pwm_kwargs(),
             )
+            self.display.set_brightness(self.settings.brightness)
             self._display_sig = signature
             self._display_on = None
         self._last_display_detect = time.monotonic()
@@ -729,7 +773,11 @@ class PresenceDaemon:
         if self._display_on == on and not force:
             return
 
-        self.display.set_power(on, force=force)
+        # Wake instantly, sleep slowly. A ramp on the way up delays the thing
+        # somebody walked over to read; on the way down it reads as the
+        # display considering rather than deciding.
+        self.display.set_power(on, force=force,
+                               fade_ms=0 if on else self.settings.pwm_fade_ms)
         now = time.monotonic()
 
         if self._display_on is True and self._display_on_since is not None:

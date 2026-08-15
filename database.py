@@ -275,7 +275,18 @@ _SETTINGS_DEFAULTS = {
     "display_backend": config.DEFAULT_DISPLAY_BACKEND,
     "display_output": config.DEFAULT_DISPLAY_OUTPUT,
     "display_rotate": config.DEFAULT_DISPLAY_ROTATE,
+    "display_off_strategy": config.DEFAULT_DISPLAY_OFF_STRATEGY,
     "kiosk_gpu": config.DEFAULT_KIOSK_GPU,
+    # PWM backlight
+    "pwm_gpio": str(config.DEFAULT_PWM_GPIO),
+    "pwm_frequency_hz": str(config.DEFAULT_PWM_FREQUENCY_HZ),
+    "pwm_gamma": str(config.DEFAULT_PWM_GAMMA),
+    "pwm_min_duty_percent": str(config.DEFAULT_PWM_MIN_DUTY_PERCENT),
+    "pwm_fade_ms": str(config.DEFAULT_PWM_FADE_MS),
+    "pwm_enable_gpio": str(config.DEFAULT_PWM_ENABLE_GPIO),
+    "pwm_enable_active_high": str(config.DEFAULT_PWM_ENABLE_ACTIVE_HIGH).lower(),
+    # Brightness
+    "brightness": str(config.DEFAULT_BRIGHTNESS),
     # Schedule
     "schedule_enabled": str(config.DEFAULT_SCHEDULE_ENABLED).lower(),
     "schedule_start": config.DEFAULT_SCHEDULE_START,
@@ -301,10 +312,19 @@ PinUse = namedtuple("PinUse", "key label pin state")
 #: configurations) or "off". The distinction is what stops doctor shouting
 #: about the sensor OUT pin colliding with the backlight on the UART setups
 #: where OUT is not connected to anything at all.
+def _strategy_has(settings, name):
+    spec = str(settings.get("display_off_strategy", "hdmi") or "hdmi")
+    return name in [p.strip().lower() for p in spec.split(",")]
+
+
 _PIN_REGISTRY = (
     ("sensor_gpio_pin", "Sensor OUT",
      lambda s: {"gpio": "on", "auto": "maybe"}.get(
          str(s.get("sensor_mode", "auto")).lower(), "off")),
+    ("pwm_gpio", "Backlight PWM",
+     lambda s: "on" if _strategy_has(s, "pwm") else "off"),
+    ("pwm_enable_gpio", "Backlight BL_EN",
+     lambda s: "on" if _strategy_has(s, "pwm") else "off"),
 )
 
 
