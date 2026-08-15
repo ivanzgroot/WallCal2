@@ -48,6 +48,14 @@ SENSOR_RETRY_INTERVAL = 10.0        # seconds between reconnect attempts
 #: as "the screen never turns off".
 SENSOR_HOLD_SECONDS = 1
 
+#: What the lit panel is currently showing. Carried instead of a boolean
+#: because brightness, and what the browser renders, both follow from it —
+#: and because the screensaver becomes one more value rather than one more
+#: flag to keep in step with the others.
+MODE_NORMAL = "normal"
+MODE_DIMMING = "dimming"
+MODE_NIGHT = "night"
+
 
 # ---------------------------------------------------------------------------
 # Settings
@@ -129,9 +137,18 @@ class Settings:
         self.dim_level = max(0, min(100, _as_int(g("dim_level"),
                                                  config.DEFAULT_DIM_LEVEL)))
 
-        self.schedule_enabled = _as_bool(g("schedule_enabled"), False)
         self.schedule_start = str(g("schedule_start") or config.DEFAULT_SCHEDULE_START)
         self.schedule_end = str(g("schedule_end") or config.DEFAULT_SCHEDULE_END)
+        self.night_mode = str(g("night_mode") or config.DEFAULT_NIGHT_MODE).lower()
+        if self.night_mode not in ("off", "dim_clock", "never_wake"):
+            self.night_mode = "off"
+        self.night_brightness = max(0, min(100, _as_int(
+            g("night_brightness"), config.DEFAULT_NIGHT_BRIGHTNESS)))
+
+    @property
+    def schedule_enabled(self) -> bool:
+        """Whether the window is enforced at all. Kept for the state file."""
+        return self.night_mode != "off"
 
     # Changing any of these means the sensor connection must be rebuilt.
     def sensor_signature(self) -> tuple:
@@ -169,7 +186,12 @@ class Settings:
             return cls({})
 
     def in_schedule(self, now: datetime | None = None) -> bool:
-        """True when the current time is inside the allowed display window."""
+        """True when the current time is inside the normal display window.
+
+        Note the sense: the window is the *permitted* period, and night mode
+        governs what happens outside it. The README has always described it
+        that way; only the setting that switches it on has changed shape.
+        """
         if not self.schedule_enabled:
             return True
         start = _parse_hhmm(self.schedule_start, dtime(0, 0))
@@ -458,7 +480,7 @@ class PresenceDaemon:
 
         self._paused = False
         self._present = False
-        self._dimming = False
+        self._mode = MODE_NORMAL
         self._present_cause: str | None = None
         self._present_since: float | None = None
         self._last_present_at: float | None = None
@@ -735,44 +757,52 @@ class PresenceDaemon:
         return False
 
     def _resolve_display(self) -> tuple:
-        """Work out (power, dimming, reason) for right now.
+        """Work out (power, mode, reason) for right now.
 
-        Deciding both together rather than in scattered early-returns is
+        Deciding these together rather than in scattered early-returns is
         deliberate: with a separate "am I dimming?" flag set along the way,
         every path that means "fully awake" has to remember to clear it, and
         the one that forgets leaves the panel stuck dim.
 
-        Power of ``None`` means "hold whatever the panel already is".
+        Power of ``None`` means "hold whatever the panel already is". The mode
+        is what the browser renders and what brightness resolves from.
         """
         command = getattr(self, "_command", runtime.DEFAULT_COMMAND)
         override = str(command.get("override", "auto"))
         wake_until = float(command.get("wake_until", 0) or 0)
 
         if override == "on":
-            return True, False, "override:on"
+            return True, MODE_NORMAL, "override:on"
         if override == "off":
-            return False, False, "override:off"
+            return False, MODE_NORMAL, "override:off"
 
         if wake_until and time.time() < wake_until:
-            return True, False, "manual-wake"
+            return True, MODE_NORMAL, "manual-wake"
 
         # While a tool holds the sensor we have no presence data, so keep the
         # panel on rather than blanking it under whoever is calibrating.
         if self._paused:
-            return True, False, "paused-for-tools"
+            return True, MODE_NORMAL, "paused-for-tools"
 
-        if not self.settings.in_schedule():
-            return False, False, "outside-schedule"
+        night = not self.settings.in_schedule()
+        if night and self.settings.night_mode == "never_wake":
+            return False, MODE_NORMAL, "outside-schedule"
+
+        # At night with dim_clock the panel still answers to presence, just
+        # dimly and with the clock only. Everything below is the same state
+        # machine; only the mode differs, which is the whole point of carrying
+        # it rather than a boolean.
+        awake_mode = MODE_NIGHT if night else MODE_NORMAL
 
         if self._present:
-            return True, False, "presence"
+            return True, awake_mode, "presence"
 
         if self._last_present_at is None:
             # Nothing has ever been seen — hold whatever we already are, but
             # default to off once the grace period after startup has passed.
             if time.time() - self._started_at > self.settings.off_timeout:
-                return False, False, "no-presence"
-            return None, False, ""
+                return False, MODE_NORMAL, "no-presence"
+            return None, MODE_NORMAL, ""
 
         # ON -> (hold expires) -> DIMMING -> (dim_seconds) -> OFF
         # Any target during DIMMING takes the "presence" branch above, which
@@ -782,24 +812,27 @@ class PresenceDaemon:
         dim_for = self.settings.dim_seconds
 
         if idle < hold:
-            return True, False, "presence-hold"
+            return True, awake_mode, "presence-hold"
         if dim_for and idle < hold + dim_for:
             # Still lit, just dimmer — it should read as the display
             # considering rather than deciding, and give whoever is there a
-            # chance to move before it commits.
-            return True, True, "dimming"
-        return False, False, "idle"
+            # chance to move before it commits. At night it is already dim, so
+            # there is nothing to step down to.
+            if awake_mode == MODE_NIGHT:
+                return True, MODE_NIGHT, "night-hold"
+            return True, MODE_DIMMING, "dimming"
+        return False, MODE_NORMAL, "idle"
 
     def _decide_display(self) -> None:
-        on, dimming, reason = self._resolve_display()
+        on, mode, reason = self._resolve_display()
         if on is None:
             return
         if on:
-            self._set_dimming(dimming, reason=reason)
+            self._set_mode(mode, reason=reason)
         else:
             # Going dark: no point ramping back to full on the way out, since
             # _apply_display is about to take it to zero regardless.
-            self._dimming = False
+            self._mode = MODE_NORMAL
         self._apply_display(on, reason=reason)
 
     def _apply_display(self, on: bool, reason: str = "", force: bool = False) -> None:
@@ -819,7 +852,7 @@ class PresenceDaemon:
             # panel is coming back up inside the dim window.
             brightness=self.display.target_brightness(
                 self.settings.brightness,
-                self.settings.dim_level if self._dimming else None,
+                self._mode_level(self._mode),
             ) if on else None,
         )
         now = time.monotonic()
@@ -855,22 +888,27 @@ class PresenceDaemon:
         self.display.set_brightness(target, fade_ms=fade_ms)
         logger.info("Brightness -> %.0f%%%s", target, f" ({reason})" if reason else "")
 
-    def _set_dimming(self, dimming: bool, reason: str = "") -> None:
-        """Enter or leave the dim-before-off state.
+    def _mode_level(self, mode: str):
+        """The brightness a mode wants, or None for the configured level."""
+        if mode == MODE_DIMMING:
+            return self.settings.dim_level
+        if mode == MODE_NIGHT:
+            return self.settings.night_brightness
+        return None
 
-        Wake instantly, sleep slowly: the ramp down takes dim_seconds so there
-        is time to notice it and move, while cancelling it snaps straight back
-        to full. A slow ramp *up* would delay exactly the person it is for.
+    def _set_mode(self, mode: str, reason: str = "") -> None:
+        """Move the lit panel into a display mode and light it accordingly.
+
+        Wake instantly, sleep slowly: the ramp into DIMMING takes dim_seconds
+        so there is time to notice it and move, while leaving it snaps back at
+        once. A slow ramp *up* would delay exactly the person it is for.
         """
-        if self._dimming == dimming:
+        if self._mode == mode:
             return
-        self._dimming = dimming
-        if dimming:
-            self._apply_brightness(dim_to=self.settings.dim_level,
-                                   fade_ms=self.settings.dim_seconds * 1000,
-                                   reason=reason or "dimming")
-        else:
-            self._apply_brightness(fade_ms=0, reason=reason or "cancelled")
+        previous, self._mode = self._mode, mode
+        fade_ms = self.settings.dim_seconds * 1000 if mode == MODE_DIMMING else 0
+        self._apply_brightness(dim_to=self._mode_level(mode), fade_ms=fade_ms,
+                               reason=reason or f"{previous}->{mode}")
 
     def _accumulate_on_time(self, seconds: float) -> None:
         today = datetime.now().date()
@@ -898,7 +936,8 @@ class PresenceDaemon:
         state = {
             "present": self._present,
             "present_cause": self._present_cause,
-            "dimming": self._dimming,
+            "display_mode": self._mode,
+            "dimming": self._mode == MODE_DIMMING,
             "paused": self._paused,
             "idle_seconds": idle,
             "display_on": self._display_on,
@@ -935,6 +974,8 @@ class PresenceDaemon:
                 "start": self.settings.schedule_start,
                 "end": self.settings.schedule_end,
                 "active_now": self.settings.in_schedule(),
+                "night_mode": self.settings.night_mode,
+                "night_brightness": self.settings.night_brightness,
             },
             "override": str(getattr(self, "_command", {}).get("override", "auto")),
             "wake_count": self._wake_count,

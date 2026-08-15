@@ -137,7 +137,8 @@ seconds without restarting anything.
 | **Sensitivity gates** | Minimum radar signal energy (0–100). Lower is more sensitive. |
 | **Release margin** | Extra distance tolerated before presence drops, so someone hovering at the edge of range does not make it flicker. |
 | **Confirm delay** | Presence must hold this long before waking — filters single-frame radar glitches. |
-| **Quiet hours** | A window outside which the panel never wakes, however much you wave at it. |
+| **Dim before off** | The panel drops to a dim level for a while before going dark, so you get a chance to move and cancel it. Set the duration to 0 to switch off outright. |
+| **Quiet hours** | A window in which the display behaves normally. **Night mode** decides what happens outside it: nothing (`off`), presence wakes a dim clock only (`dim clock`), or the panel never wakes at all (`never wake`). |
 
 When the sensor is on UART, WallCal also programs the threshold into the
 radar's own detection gates, so it stops reporting distant targets at all.

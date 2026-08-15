@@ -76,10 +76,17 @@ DEFAULT_BRIGHTNESS = 100              # normal, awake brightness
 DEFAULT_DIM_SECONDS = 20
 DEFAULT_DIM_LEVEL = 25                # perceptual 0–100
 
-# --- Schedule (display stays dark outside this window when enabled) ---
-DEFAULT_SCHEDULE_ENABLED = False
+# --- Schedule / night mode ---
+# schedule_start..schedule_end is the window in which the display behaves
+# normally. night_mode decides what happens *outside* it:
+#   off         no restriction at all
+#   dim_clock   presence wakes a dim clock rather than the full layout
+#   never_wake  the panel stays dark however much you wave at it
+DEFAULT_SCHEDULE_ENABLED = False      # legacy; migrated into night_mode
 DEFAULT_SCHEDULE_START = "06:30"
 DEFAULT_SCHEDULE_END = "23:00"
+DEFAULT_NIGHT_MODE = "off"            # off | dim_clock | never_wake
+DEFAULT_NIGHT_BRIGHTNESS = 15         # perceptual 0–100, for dim_clock
 
 # --- Kiosk ---
 KIOSK_URL = os.environ.get("WALLCAL_KIOSK_URL", f"http://localhost:{PORT}/")

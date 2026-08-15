@@ -246,6 +246,24 @@ def _m1_sensor_gpio_pin(conn, fresh):
                 _LEGACY_SENSOR_GPIO_PIN)
 
 
+@migration(2, "fold schedule_enabled into night_mode")
+def _m2_night_mode(conn, fresh):
+    """Quiet hours grew a third option, so the boolean became a mode.
+
+    schedule_enabled meant "outside the window, never wake". That is exactly
+    night_mode=never_wake, so anyone who had it on keeps the behaviour they
+    had and simply gains dim_clock as a choice.
+    """
+    if fresh or _has_setting(conn, "night_mode"):
+        return
+    row = conn.execute(
+        "SELECT value FROM settings WHERE key = 'schedule_enabled'"
+    ).fetchone()
+    enabled = bool(row) and str(row["value"]).strip().lower() in (
+        "1", "true", "yes", "on")
+    _put_setting(conn, "night_mode", "never_wake" if enabled else "off")
+
+
 # ---------------------------------------------------------------------------
 # Settings CRUD
 # ---------------------------------------------------------------------------
@@ -289,10 +307,12 @@ _SETTINGS_DEFAULTS = {
     "brightness": str(config.DEFAULT_BRIGHTNESS),
     "dim_seconds": str(config.DEFAULT_DIM_SECONDS),
     "dim_level": str(config.DEFAULT_DIM_LEVEL),
-    # Schedule
+    # Schedule / night mode
     "schedule_enabled": str(config.DEFAULT_SCHEDULE_ENABLED).lower(),
     "schedule_start": config.DEFAULT_SCHEDULE_START,
     "schedule_end": config.DEFAULT_SCHEDULE_END,
+    "night_mode": config.DEFAULT_NIGHT_MODE,
+    "night_brightness": str(config.DEFAULT_NIGHT_BRIGHTNESS),
 }
 
 #: Every setting the API is willing to write. Kept next to the defaults so
