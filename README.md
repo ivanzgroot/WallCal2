@@ -54,10 +54,22 @@ strength, the OUT pin gives a bare present/not-present signal.
 | `GND`      | 6      | GND        | always     |
 | `TX`       | 10     | GPIO15 RXD | UART mode  |
 | `RX`       | 8      | GPIO14 TXD | UART mode  |
-| `OUT`      | 12     | GPIO18     | GPIO mode  |
+| `OUT`      | 16     | GPIO23     | GPIO mode  |
 
 Wire all five and leave the mode on **auto** — WallCal finds the radar on
 serial and falls back to the OUT pin if it cannot.
+
+> **`OUT` moved from GPIO18 to GPIO23.** GPIO18 is one of only four pins with
+> hardware PWM and is the default for the [backlight](#backlight-pwm); `OUT`
+> can live anywhere. Existing installations keep GPIO18 — the setting is
+> migrated on upgrade, so nothing needs rewiring. It only matters if you use
+> **GPIO sensor mode *and* the PWM backlight**, in which case move the `OUT`
+> wire to pin 16. In UART mode, the default, `OUT` is unused and the two never
+> collide.
+>
+> The pin is a setting either way: `./wallcal.sh config set sensor_gpio_pin=23`.
+> `doctor` checks every configured pin against every other and tells you if two
+> of them end up on the same one.
 
 ### Why the installer offers to disable Bluetooth
 
@@ -135,6 +147,87 @@ software on top.
 ---
 
 ## Display power
+
+### Choosing how the panel goes off
+
+Not every panel can be switched off by the Pi. A monitor or TV honours DPMS or
+CEC; a bare HDMI→eDP driver board of the RTD2556 class does not — its backlight
+stays lit whatever the Pi does with its output. So *how* the display goes dark
+is a setting rather than an assumption:
+
+| Strategy | Mechanism | Suits |
+|---|---|---|
+| `hdmi` | The backends below, autodetected as always | Monitors and TVs that honour DPMS/CEC |
+| `pwm` | Hardware PWM on the panel's backlight line | Bare driver boards |
+| `css` | Browser-side dimming; the panel stays powered | Anything, with no wiring at all |
+| `none` | Never power off — show a screensaver instead | Always-on installations |
+
+`hdmi` is the default and behaves exactly as it always has. Strategies combine
+with commas, the same way display backends do:
+
+```bash
+./wallcal.sh display strategy            # what is set now
+./wallcal.sh display strategy pwm,hdmi   # ramp the backlight down AND drop the output
+./wallcal.sh display strategy css        # no wiring; dim in the browser
+```
+
+All four converge on **one brightness value**, 0–100, perceptual. Under `pwm`
+it is a duty cycle; otherwise the browser applies it as an overlay. Nothing
+else in the project computes a brightness of its own.
+
+### Backlight PWM
+
+Only needed for `pwm`. It is the one thing here that is *not* autodetected,
+because which pin carries the signal depends entirely on how you wired it.
+
+Two signals are worth tapping — the first is required, the second is better:
+
+- **`BL_PWM`** — the dimming input on the board's LED driver. Cut the trace (or
+  lift the resistor) between the scaler's PWM output and the driver's dim pin,
+  then inject the Pi's PWM there.
+- **`BL_EN`** — backlight enable. Many LED drivers leak a faint glow at 0% duty;
+  a plain GPIO here gives a true hard off. Both signals are levels, so the
+  arrangement needs no feedback to stay in step.
+
+> **Do not drive the board's front-panel power button instead.** It is a toggle
+> with no deterministic state, it needs the power LED sensed to stay in sync,
+> and it cannot dim. PWM is a level and needs none of that.
+
+Hardware PWM is available on four pins, and the device-tree `func` value
+differs per pin — a wrong one produces no output and no error:
+
+| GPIO | Channel | Overlay line |
+|---|---|---|
+| 12 | PWM0 | `dtoverlay=pwm,pin=12,func=4` |
+| 13 | PWM1 | `dtoverlay=pwm,pin=13,func=4` |
+| **18** | PWM0 | `dtoverlay=pwm,pin=18,func=2` ← default |
+| 19 | PWM1 | `dtoverlay=pwm,pin=19,func=2` |
+
+The installer writes the right line for whichever pin is configured. To set it
+up and prove the wiring:
+
+```bash
+./wallcal.sh display strategy pwm,hdmi
+sudo ./wallcal.sh install --only uart    # rewrites the boot config block
+sudo reboot
+./wallcal.sh display pwm status          # overlay, sysfs, configured pins
+./wallcal.sh display pwm test            # sweep 0 -> 100 -> 0
+```
+
+`display pwm test` works with the daemon running — it asks it to stand down for
+the duration, the same way the sensor tools do.
+
+Everything is tunable: frequency (default 2 kHz — below roughly 200 Hz the
+flicker is perceptible), the gamma curve, the minimum duty floor (default 3%,
+since many drivers cut out below a few percent) and the fade duration.
+
+**Software PWM is deliberately not supported.** `RPi.GPIO`'s software PWM
+jitters under scheduler load and the flicker is visible on a display you look
+at every day. If the overlay is missing WallCal says so rather than quietly
+falling back to something worse — and the rest of your strategy keeps working
+in the meantime.
+
+### Backends for the `hdmi` strategy
 
 The panel is switched by whichever mechanism the Pi actually has. WallCal
 probes them all at startup and picks the best available, preferring the ones
@@ -248,6 +341,24 @@ and what range the sensor is configured for. Usually one of:
 (`./wallcal.sh presence auto`), then `./wallcal.sh display test` — if the panel
 does not blink, no backend has real control and you probably want `cec`.
 
+If the panel is a bare driver board, no backend will ever work: those keep the
+backlight lit whatever happens to the HDMI signal. Switch strategy instead —
+`./wallcal.sh display strategy css` dims in the browser with no wiring, and
+`pwm` genuinely switches the backlight once you have tapped `BL_PWM`.
+
+**The backlight PWM does nothing.** `./wallcal.sh display pwm status` first —
+it reports whether the overlay is loaded and whether the pin matches. The usual
+causes, in order:
+
+- *No reboot since adding the overlay.* `/sys/class/pwm` does not appear until
+  the kernel has loaded it.
+- *The wrong `func` for the pin.* `func=2` is for GPIO18/19 and `func=4` for
+  GPIO12/13; the wrong one loads without complaint and drives nothing.
+- *`display_off_strategy` does not include `pwm`.* Setting the pins alone does
+  not enable it.
+- *The trace was not cut.* The scaler's own PWM output is still driving the dim
+  pin and fighting the Pi's.
+
 **No sensor found.** `./wallcal.sh sensor scan --save` sweeps every port and
 baud rate. If there are no serial devices at all, the UART step has not run or
 the Pi has not rebooted since: `sudo ./wallcal.sh install --only uart`.
@@ -309,6 +420,8 @@ config.py               Defaults, all overridable via WALLCAL_* env vars
 presence/
   ld2410.py             HLK-LD2410C UART protocol driver
   display.py            Display power backends with autodetection
+  pwm.py                Hardware PWM backlight (BL_PWM / BL_EN)
+  panel.py              Off-strategy and the single brightness value
   daemon.py             Presence state machine
   runtime.py            IPC between the daemon and the web app
   cli.py                Sensor/display/presence tooling
