@@ -138,6 +138,13 @@ class PanelController:
 
     @property
     def brightness(self) -> float:
+        """The level the panel shows *while lit*, not what the hardware is at.
+
+        Switching off drives the backlight to zero without changing this, so
+        waking has something to return to. Readers pair it with the power
+        state: display_on says whether there is light, brightness says how
+        much when there is.
+        """
         return self._brightness
 
     @property
@@ -175,7 +182,7 @@ class PanelController:
             self.pwm.set_brightness(percent, fade_ms=fade_ms)
         return percent
 
-    def target_brightness(self, base: float, scale: float = 1.0,
+    def target_brightness(self, base: float, dim_to: float | None = None,
                           ambient: float | None = None) -> float:
         """Resolve the one brightness value everything converges on.
 
@@ -186,13 +193,17 @@ class PanelController:
         the browser overlay, the state file, the CLI — already reads the
         result rather than deriving its own.
 
-        ``scale`` is what the presence states use: 1.0 awake, lower while
-        dimming or in night mode.
+        ``dim_to`` is an absolute level, used by the dim-before-off state and
+        by night mode. It is clamped to ``base`` because dimming must never
+        brighten: a panel already set to 20 does not go *up* to a dim level
+        of 25 on its way to switching off.
         """
-        value = max(0.0, min(100.0, float(base))) * max(0.0, min(1.0, float(scale)))
+        base = max(0.0, min(100.0, float(base)))
         if ambient is not None:
-            value = max(0.0, min(100.0, float(ambient)))
-        return round(value, 1)
+            return round(max(0.0, min(100.0, float(ambient))), 1)
+        if dim_to is not None:
+            return round(min(base, max(0.0, min(100.0, float(dim_to)))), 1)
+        return round(base, 1)
 
     def set_power(self, on: bool, force: bool = False, fade_ms: int = 0,
                   brightness: float | None = None) -> bool:

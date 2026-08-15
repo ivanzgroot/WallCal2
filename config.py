@@ -70,6 +70,12 @@ DEFAULT_PWM_ENABLE_ACTIVE_HIGH = True
 # --- Brightness (single perceptual 0–100 value; see presence/panel.py) ---
 DEFAULT_BRIGHTNESS = 100              # normal, awake brightness
 
+# --- Dim before off ---
+# The panel drops to DIM_LEVEL for DIM_SECONDS after the hold expires, and
+# only then goes dark. Any presence during the dim cancels it instantly.
+DEFAULT_DIM_SECONDS = 20
+DEFAULT_DIM_LEVEL = 25                # perceptual 0–100
+
 # --- Schedule (display stays dark outside this window when enabled) ---
 DEFAULT_SCHEDULE_ENABLED = False
 DEFAULT_SCHEDULE_START = "06:30"

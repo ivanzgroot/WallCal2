@@ -287,6 +287,8 @@ _SETTINGS_DEFAULTS = {
     "pwm_enable_active_high": str(config.DEFAULT_PWM_ENABLE_ACTIVE_HIGH).lower(),
     # Brightness
     "brightness": str(config.DEFAULT_BRIGHTNESS),
+    "dim_seconds": str(config.DEFAULT_DIM_SECONDS),
+    "dim_level": str(config.DEFAULT_DIM_LEVEL),
     # Schedule
     "schedule_enabled": str(config.DEFAULT_SCHEDULE_ENABLED).lower(),
     "schedule_start": config.DEFAULT_SCHEDULE_START,

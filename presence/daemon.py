@@ -124,6 +124,10 @@ class Settings:
 
         self.brightness = max(0, min(100, _as_int(g("brightness"),
                                                   config.DEFAULT_BRIGHTNESS)))
+        self.dim_seconds = max(0, _as_int(g("dim_seconds"),
+                                          config.DEFAULT_DIM_SECONDS))
+        self.dim_level = max(0, min(100, _as_int(g("dim_level"),
+                                                 config.DEFAULT_DIM_LEVEL)))
 
         self.schedule_enabled = _as_bool(g("schedule_enabled"), False)
         self.schedule_start = str(g("schedule_start") or config.DEFAULT_SCHEDULE_START)
@@ -454,6 +458,7 @@ class PresenceDaemon:
 
         self._paused = False
         self._present = False
+        self._dimming = False
         self._present_cause: str | None = None
         self._present_since: float | None = None
         self._last_present_at: float | None = None
@@ -729,48 +734,73 @@ class PresenceDaemon:
 
         return False
 
-    def _decide_display(self) -> None:
+    def _resolve_display(self) -> tuple:
+        """Work out (power, dimming, reason) for right now.
+
+        Deciding both together rather than in scattered early-returns is
+        deliberate: with a separate "am I dimming?" flag set along the way,
+        every path that means "fully awake" has to remember to clear it, and
+        the one that forgets leaves the panel stuck dim.
+
+        Power of ``None`` means "hold whatever the panel already is".
+        """
         command = getattr(self, "_command", runtime.DEFAULT_COMMAND)
         override = str(command.get("override", "auto"))
         wake_until = float(command.get("wake_until", 0) or 0)
-        now = time.monotonic()
 
         if override == "on":
-            self._apply_display(True, reason="override:on")
-            return
+            return True, False, "override:on"
         if override == "off":
-            self._apply_display(False, reason="override:off")
-            return
+            return False, False, "override:off"
 
         if wake_until and time.time() < wake_until:
-            self._apply_display(True, reason="manual-wake")
-            return
+            return True, False, "manual-wake"
 
         # While a tool holds the sensor we have no presence data, so keep the
         # panel on rather than blanking it under whoever is calibrating.
         if self._paused:
-            self._apply_display(True, reason="paused-for-tools")
-            return
+            return True, False, "paused-for-tools"
 
         if not self.settings.in_schedule():
-            self._apply_display(False, reason="outside-schedule")
-            return
+            return False, False, "outside-schedule"
 
         if self._present:
-            self._apply_display(True, reason="presence")
-            return
+            return True, False, "presence"
 
         if self._last_present_at is None:
             # Nothing has ever been seen — hold whatever we already are, but
             # default to off once the grace period after startup has passed.
             if time.time() - self._started_at > self.settings.off_timeout:
-                self._apply_display(False, reason="no-presence")
-            return
+                return False, False, "no-presence"
+            return None, False, ""
 
-        idle = now - self._last_present_at
-        self._apply_display(idle < self.settings.off_timeout,
-                            reason="idle" if idle >= self.settings.off_timeout
-                            else "presence-hold")
+        # ON -> (hold expires) -> DIMMING -> (dim_seconds) -> OFF
+        # Any target during DIMMING takes the "presence" branch above, which
+        # cancels the dim and ramps straight back up.
+        idle = time.monotonic() - self._last_present_at
+        hold = self.settings.off_timeout
+        dim_for = self.settings.dim_seconds
+
+        if idle < hold:
+            return True, False, "presence-hold"
+        if dim_for and idle < hold + dim_for:
+            # Still lit, just dimmer — it should read as the display
+            # considering rather than deciding, and give whoever is there a
+            # chance to move before it commits.
+            return True, True, "dimming"
+        return False, False, "idle"
+
+    def _decide_display(self) -> None:
+        on, dimming, reason = self._resolve_display()
+        if on is None:
+            return
+        if on:
+            self._set_dimming(dimming, reason=reason)
+        else:
+            # Going dark: no point ramping back to full on the way out, since
+            # _apply_display is about to take it to zero regardless.
+            self._dimming = False
+        self._apply_display(on, reason=reason)
 
     def _apply_display(self, on: bool, reason: str = "", force: bool = False) -> None:
         if self.display is None:
@@ -784,10 +814,13 @@ class PresenceDaemon:
         self.display.set_power(
             on, force=force,
             fade_ms=0 if on else self.settings.pwm_fade_ms,
-            # Waking always returns to the configured level, whatever a dim
-            # state left the panel at.
-            brightness=self.display.target_brightness(self.settings.brightness)
-            if on else None,
+            # Waking returns to the level the *current* state wants, which is
+            # the configured brightness normally but the dim level if the
+            # panel is coming back up inside the dim window.
+            brightness=self.display.target_brightness(
+                self.settings.brightness,
+                self.settings.dim_level if self._dimming else None,
+            ) if on else None,
         )
         now = time.monotonic()
 
@@ -806,21 +839,38 @@ class PresenceDaemon:
         self._display_reason = reason
         self._write_state(force=True)
 
-    def _apply_brightness(self, scale: float = 1.0, fade_ms: int = 0,
+    def _apply_brightness(self, dim_to: float | None = None, fade_ms: int = 0,
                           reason: str = "") -> None:
         """Drive the panel to the resolved brightness for the current state.
 
         Everything that wants the panel dimmer — the dim-before-off state,
-        night mode, the screensaver — asks for a ``scale`` here rather than
-        computing a level of its own. One value, one place that resolves it.
+        night mode, the screensaver — passes a level here rather than
+        computing one of its own. One value, one place that resolves it.
         """
         if self.display is None:
             return
-        target = self.display.target_brightness(self.settings.brightness, scale)
+        target = self.display.target_brightness(self.settings.brightness, dim_to)
         if abs(target - self.display.brightness) < 0.5:
             return
         self.display.set_brightness(target, fade_ms=fade_ms)
         logger.info("Brightness -> %.0f%%%s", target, f" ({reason})" if reason else "")
+
+    def _set_dimming(self, dimming: bool, reason: str = "") -> None:
+        """Enter or leave the dim-before-off state.
+
+        Wake instantly, sleep slowly: the ramp down takes dim_seconds so there
+        is time to notice it and move, while cancelling it snaps straight back
+        to full. A slow ramp *up* would delay exactly the person it is for.
+        """
+        if self._dimming == dimming:
+            return
+        self._dimming = dimming
+        if dimming:
+            self._apply_brightness(dim_to=self.settings.dim_level,
+                                   fade_ms=self.settings.dim_seconds * 1000,
+                                   reason=reason or "dimming")
+        else:
+            self._apply_brightness(fade_ms=0, reason=reason or "cancelled")
 
     def _accumulate_on_time(self, seconds: float) -> None:
         today = datetime.now().date()
@@ -848,6 +898,7 @@ class PresenceDaemon:
         state = {
             "present": self._present,
             "present_cause": self._present_cause,
+            "dimming": self._dimming,
             "paused": self._paused,
             "idle_seconds": idle,
             "display_on": self._display_on,
