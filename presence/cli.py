@@ -475,6 +475,139 @@ def cmd_display_power(args) -> int:
     return 0
 
 
+def _pwm_from_settings():
+    """Build a PwmBacklight from the stored settings, without the daemon."""
+    from presence import pwm as pwm_mod
+    s = database.get_all_settings()
+
+    def num(key, default, cast=int):
+        try:
+            return cast(float(str(s.get(key, default)).strip()))
+        except (TypeError, ValueError):
+            return cast(default)
+
+    return pwm_mod.PwmBacklight(
+        pin=num("pwm_gpio", config.DEFAULT_PWM_GPIO),
+        frequency_hz=num("pwm_frequency_hz", config.DEFAULT_PWM_FREQUENCY_HZ),
+        gamma=num("pwm_gamma", config.DEFAULT_PWM_GAMMA, float),
+        min_duty_percent=num("pwm_min_duty_percent",
+                             config.DEFAULT_PWM_MIN_DUTY_PERCENT, float),
+        enable_pin=num("pwm_enable_gpio", config.DEFAULT_PWM_ENABLE_GPIO),
+        enable_active_high=str(s.get("pwm_enable_active_high", "true")).lower()
+        in ("1", "true", "yes", "on"),
+    )
+
+
+def cmd_display_pwm_status(args) -> int:
+    from presence import pwm as pwm_mod
+    s = database.get_all_settings()
+    report = pwm_mod.survey()
+    report["configured"] = {
+        "strategy": s.get("display_off_strategy", "hdmi"),
+        "pin": s.get("pwm_gpio"),
+        "frequency_hz": s.get("pwm_frequency_hz"),
+        "gamma": s.get("pwm_gamma"),
+        "min_duty_percent": s.get("pwm_min_duty_percent"),
+        "fade_ms": s.get("pwm_fade_ms"),
+        "enable_pin": s.get("pwm_enable_gpio"),
+    }
+    try:
+        report["overlay_line"] = pwm_mod.overlay_line(int(s.get("pwm_gpio", 18)))
+    except Exception as exc:
+        report["overlay_line"] = None
+        report["overlay_error"] = str(exc)
+
+    def human(r):
+        cfg = r["configured"]
+        print(bold("PWM backlight"))
+        print(f"  strategy      {cfg['strategy']}")
+        print(f"  pin           GPIO{cfg['pin']}")
+        print(f"  frequency     {cfg['frequency_hz']} Hz")
+        print(f"  gamma         {cfg['gamma']}   min duty {cfg['min_duty_percent']}%")
+        print(f"  fade          {cfg['fade_ms']} ms")
+        enable = cfg["enable_pin"]
+        print(f"  BL_EN         {'not wired' if str(enable) in ('-1', '') else 'BCM ' + str(enable)}")
+        print()
+        if r.get("overlay_line"):
+            print(f"  needs         {cyan(r['overlay_line'])}")
+        elif r.get("overlay_error"):
+            print("  " + red(r["overlay_error"]))
+        if not r["available"]:
+            print("  " + yellow("no /sys/class/pwm — the overlay is not loaded"))
+            print(dim("  add the line above to /boot/firmware/config.txt and reboot"))
+        else:
+            for chip in r["chips"]:
+                print(f"  {chip['path']}  channels: {chip['npwm']}"
+                      f"  exported: {', '.join(chip['exported']) or '-'}")
+
+    emit(report, args.json, human)
+    return 0 if report["available"] else 1
+
+
+def cmd_display_pwm_test(args) -> int:
+    """Sweep the backlight so the wiring can be proved on its own.
+
+    Takes the channel from the daemon the same way the sensor tools take the
+    serial port — otherwise both would be writing duty cycles at each other.
+    """
+    from presence import pwm as pwm_mod
+
+    backlight = _pwm_from_settings()
+    print(dim(f"Sweeping {backlight.describe()} over {args.seconds:.0f}s…"))
+
+    # Same arbitration as the sensor tools. The pause is what makes the daemon
+    # hold the panel steady instead of changing power under the sweep — it is
+    # named for the sensor because that is what needed it first.
+    with sensor_access():
+        try:
+            backlight.open()
+        except pwm_mod.PwmError as exc:
+            print(red(str(exc)))
+            return 1
+        try:
+            width = 40
+
+            def show(value):
+                filled = int(round(value / 100.0 * width))
+                bar = "█" * filled + "·" * (width - filled)
+                duty = pwm_mod.perceptual_to_duty(
+                    value, backlight.gamma, backlight.min_duty_percent)
+                sys.stdout.write(f"\r  {bar} {value:5.1f}%  duty {duty * 100:5.1f}% ")
+                sys.stdout.flush()
+
+            backlight.sweep(seconds=args.seconds, on_step=show)
+            print()
+        finally:
+            # Leave it lit rather than dark: whoever ran this is standing in
+            # front of the panel looking at it, and the sweep ends at zero.
+            backlight.set_brightness(100)
+
+    print(green("Sweep complete — if the panel brightened and dimmed, the tap works"))
+    return 0
+
+
+def cmd_display_strategy(args) -> int:
+    from presence.panel import parse_strategy, STRATEGIES
+    if not args.value:
+        current = database.get_setting("display_off_strategy",
+                                       config.DEFAULT_DISPLAY_OFF_STRATEGY)
+        print(current)
+        return 0
+    parsed = parse_strategy(args.value)
+    requested = [p.strip().lower() for p in args.value.split(",") if p.strip()]
+    unknown = [r for r in requested if r not in STRATEGIES]
+    if unknown:
+        print(red(f"unknown strategy: {', '.join(unknown)}"))
+        print(dim("known: " + ", ".join(STRATEGIES)))
+        return 2
+    database.set_setting("display_off_strategy", ",".join(parsed))
+    runtime.request_rescan()
+    print(green(f"Off-strategy set to {','.join(parsed)}"))
+    if "pwm" in parsed:
+        print(dim("check the wiring with: wallcal.sh display pwm test"))
+    return 0
+
+
 def cmd_display_autoselect(args) -> int:
     """Pin the best available backend, rather than leaving it to chance.
 
@@ -730,6 +863,19 @@ def build_parser() -> argparse.ArgumentParser:
                                help="pick the best backend and pin it")
     p.add_argument("--save", action="store_true", help="write it to settings")
     p.set_defaults(func=cmd_display_autoselect)
+
+    p = display_sub.add_parser("strategy", help="how the panel is switched off")
+    p.add_argument("value", nargs="?",
+                   help="hdmi | pwm | css | none, comma-separated; omit to show")
+    p.set_defaults(func=cmd_display_strategy)
+
+    pwm_p = display_sub.add_parser("pwm", help="backlight PWM tools")
+    pwm_sub = pwm_p.add_subparsers(dest="pwm_action", required=True)
+    pwm_sub.add_parser("status", help="configured pins, overlay and sysfs state"
+                       ).set_defaults(func=cmd_display_pwm_status)
+    p = pwm_sub.add_parser("test", help="sweep 0->100->0 to verify the wiring")
+    p.add_argument("--seconds", type=float, default=6.0)
+    p.set_defaults(func=cmd_display_pwm_test)
 
     p = display_sub.add_parser("rotate", help="rotate the output")
     p.add_argument("transform", choices=["normal", "left", "right", "inverted"])

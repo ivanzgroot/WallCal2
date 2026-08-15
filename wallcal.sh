@@ -573,6 +573,28 @@ step_groups() {
   fi
 }
 
+# The backlight overlay belongs inside the same managed block as the UART one,
+# because step_uart regenerates that block wholesale. Written anywhere else it
+# would survive, but be orphaned from the block that owns it and lost the next
+# time somebody runs 'install --only uart'.
+boot_block_pwm() {
+  local line
+  line="$(py_user -c "
+import database
+from presence import pwm
+s = database.get_all_settings()
+strategy = [p.strip().lower() for p in str(s.get('display_off_strategy','hdmi')).split(',')]
+if 'pwm' in strategy:
+    try:
+        print(pwm.overlay_line(int(s.get('pwm_gpio', 18))))
+    except Exception:
+        pass
+" 2>/dev/null || true)"
+  [[ -n "$line" ]] || return 0
+  printf '\n# Hardware PWM for the panel backlight (BL_PWM)\n'
+  printf '%s\n' "$line"
+}
+
 step_uart() {
   step_header "Serial UART for the presence sensor"
   local config_txt cmdline_txt
@@ -616,6 +638,7 @@ step_uart() {
     printf 'enable_uart=1\n'
     printf 'dtoverlay=%s\n' "$overlay"
     [[ -n "$extra" ]] && printf '%s' "$extra"
+    boot_block_pwm
     printf '%s\n' "$BLOCK_END"
   } >"$staged"
   write_root_file "$config_txt" <"$staged"
@@ -1422,6 +1445,15 @@ cmd_display() {
       pcli settings set "display_backend=${1:?usage: display backend <name|auto>}"
       pcli presence rescan
       ;;
+    strategy)  pcli display strategy "$@" ;;
+    pwm)
+      local sub="${1:-status}"; shift || true
+      case "$sub" in
+        status) pcli $(json_flag) display pwm status ;;
+        test)   pcli display pwm test "$@" ;;
+        *) die "usage: wallcal.sh display pwm {status|test}" ;;
+      esac
+      ;;
     output)
       pcli settings set "display_output=${1:?usage: display output <name|auto>}"
       pcli presence rescan
@@ -1433,7 +1465,7 @@ cmd_display() {
       pcli display on
       ok "if the panel blinked, display control works"
       ;;
-    *) die "usage: wallcal.sh display {detect|status|on|off|toggle|test|rotate|backend|output}" ;;
+    *) die "usage: wallcal.sh display {detect|status|on|off|toggle|test|rotate|backend|output|strategy|pwm}" ;;
   esac
 }
 
@@ -1532,6 +1564,93 @@ chk() {
   [[ -n "$detail" ]] && printf '      %s\n' "${C_GREY}${detail}${C_RESET}"
   [[ -n "$hint" && "$status" != ok ]] && printf '      %s\n' "${C_CYAN}→ ${hint}${C_RESET}"
   return 0
+}
+
+# Only checked when the off-strategy actually includes pwm — a user on a
+# monitor that honours DPMS should never be told about a backlight they have
+# no reason to have wired.
+doctor_backlight() {
+  local report enabled pin overlay err sysfs config_txt
+  # Tab-separated rather than JSON: there is no JSON helper in this script and
+  # adding one for four fields is not worth it.
+  report="$(py_user -c "
+import database
+from presence import pwm
+
+s = database.get_all_settings()
+strategy = [p.strip().lower() for p in str(s.get('display_off_strategy','hdmi')).split(',')]
+enabled = 'pwm' in strategy
+overlay = err = ''
+sysfs = False
+if enabled:
+    try:
+        overlay = pwm.overlay_line(int(s.get('pwm_gpio', 18)))
+    except Exception as exc:
+        err = str(exc)
+    sysfs = pwm.survey()['available']
+print('\t'.join(['1' if enabled else '0', str(s.get('pwm_gpio','')),
+                 overlay, err, '1' if sysfs else '0']))
+" 2>/dev/null || printf '0\t\t\t\t0')"
+
+  IFS=$'\t' read -r enabled pin overlay err sysfs <<<"$report"
+  [[ "$enabled" == "1" ]] || return 0
+
+  if [[ -n "$err" ]]; then
+    chk fail "backlight PWM: $err" "" \
+      "./wallcal.sh config set pwm_gpio=18   # or 12, 13, 19"
+    return 0
+  fi
+
+  config_txt="$(boot_config_path 2>/dev/null || true)"
+  if [[ -n "$config_txt" ]] && grep -qF "$overlay" "$config_txt" 2>/dev/null; then
+    chk ok "backlight PWM overlay present (GPIO$pin)"
+  elif [[ -n "$config_txt" ]] && grep -qE '^dtoverlay=pwm' "$config_txt" 2>/dev/null; then
+    # An overlay for a different pin, or the wrong func, produces no output
+    # and no error at all — the single most confusing PWM failure there is.
+    chk fail "backlight PWM overlay does not match GPIO$pin" \
+      "config.txt has a pwm overlay, but not '$overlay'" \
+      "the func value differs per pin; fix the line to: $overlay"
+  else
+    chk fail "backlight PWM overlay missing" \
+      "the pwm strategy is selected but no dtoverlay=pwm line is present" \
+      "add '$overlay' to $config_txt and reboot"
+  fi
+
+  if [[ "$sysfs" == "1" ]]; then
+    chk ok "backlight PWM sysfs available"
+  else
+    chk fail "no /sys/class/pwm — the overlay is not loaded" \
+      "a reboot is needed after adding the overlay" \
+      "sudo reboot, then ./wallcal.sh display pwm test"
+  fi
+}
+
+# Generic: every configured pin is checked against every other, so a pin
+# setting added later is covered without touching this.
+doctor_pins() {
+  local conflicts
+  conflicts="$(py_user -c "
+import database
+for severity, a, b in database.pin_conflicts():
+    print('%s\t%s\t%s\tGPIO%d' % (severity, a.label, b.label, a.pin))
+" 2>/dev/null || true)"
+
+  if [[ -z "$conflicts" ]]; then
+    chk ok "no GPIO pin conflicts"
+    return 0
+  fi
+  while IFS=$'\t' read -r severity a b pin; do
+    [[ -n "$severity" ]] || continue
+    if [[ "$severity" == "error" ]]; then
+      chk fail "$a and $b are both on $pin" \
+        "two things are driving the same pin" \
+        "move one: ./wallcal.sh config set sensor_gpio_pin=23"
+    else
+      chk warn "$a and $b share $pin" \
+        "only a problem if both are wired up — one of them is not active in this mode" \
+        "if you use both, move one: ./wallcal.sh config set sensor_gpio_pin=23"
+    fi
+  done <<<"$conflicts"
 }
 
 cmd_doctor() {
@@ -1715,6 +1834,9 @@ else:
       "is a desktop session running as $RUN_USER?" \
       "./wallcal.sh display detect"
   fi
+  doctor_backlight
+  doctor_pins
+
   if [[ -f "$KIOSK_DESKTOP" ]]; then
     chk ok "kiosk autostart installed"
   else
@@ -1871,7 +1993,7 @@ _wallcal() {
             watchdog maintain info url open version help completion"
   case "$prev" in
     kiosk)    COMPREPLY=($(compgen -W "start stop restart status logs gpu diagnose" -- "$cur")); return ;;
-    display)  COMPREPLY=($(compgen -W "detect autoselect status on off toggle test rotate backend output" -- "$cur")); return ;;
+    display)  COMPREPLY=($(compgen -W "detect autoselect status on off toggle test rotate backend output strategy pwm" -- "$cur")); return ;;
     sensor)   COMPREPLY=($(compgen -W "status scan monitor params gates sensitivity calibrate reset" -- "$cur")); return ;;
     presence) COMPREPLY=($(compgen -W "status on off auto wake rescan distance timeout" -- "$cur")); return ;;
     config)   COMPREPLY=($(compgen -W "list get set edit" -- "$cur")); return ;;
