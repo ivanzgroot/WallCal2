@@ -123,7 +123,103 @@ def init_db():
             CREATE INDEX IF NOT EXISTS idx_events_calendar
                 ON events_cache(calendar_id);
         """)
+        _run_migrations(conn)
     logger.info("Database initialized at %s", config.DATABASE_PATH)
+
+
+# ---------------------------------------------------------------------------
+# Schema migrations
+#
+# These exist because of how _SETTINGS_DEFAULTS works: it is merged in at
+# *read* time rather than written out at install, so a setting nobody has
+# touched has no row at all. Changing a default therefore changes behaviour on
+# every existing installation the moment the new code lands — silently, and
+# invisibly in a diff that only touches config.py.
+#
+# A migration's job is usually to pin the old value down as a real row first,
+# so only fresh installs pick up the new default.
+# ---------------------------------------------------------------------------
+
+_MIGRATIONS = []
+
+
+def migration(version, description):
+    """Register a schema migration. Applied once, in version order.
+
+    The wrapped function is called as ``fn(conn, fresh_install)``.
+    """
+    def register(fn):
+        _MIGRATIONS.append((int(version), str(description), fn))
+        return fn
+    return register
+
+
+def schema_version(conn=None) -> int:
+    """Highest migration applied to this database. 0 means none."""
+    if conn is None:
+        with get_db() as own:
+            return schema_version(own)
+    row = conn.execute(
+        "SELECT value FROM settings WHERE key = 'schema_version'"
+    ).fetchone()
+    try:
+        return int(row["value"]) if row else 0
+    except (TypeError, ValueError):
+        return 0
+
+
+def _is_fresh_install(conn) -> bool:
+    """True when this database has never been used.
+
+    Both tables are empty only on a genuinely new install. The distinction
+    matters for any migration that changes a default: an upgrade must keep the
+    behaviour it already had, a new install should get the new value.
+    """
+    for table in ("settings", "calendars"):
+        if conn.execute(f"SELECT 1 FROM {table} LIMIT 1").fetchone():
+            return False
+    return True
+
+
+def _run_migrations(conn) -> None:
+    current = schema_version(conn)
+    pending = sorted(m for m in _MIGRATIONS if m[0] > current)
+    if not pending:
+        return
+
+    # Resolved once, before anything writes: the first migration to store a
+    # row makes the settings table non-empty, and the answer would then flip
+    # for every migration after it.
+    fresh = _is_fresh_install(conn)
+    logger.info("Migrating database from schema %d (%s install)",
+                current, "new" if fresh else "existing")
+
+    for version, description, fn in pending:
+        fn(conn, fresh)
+        conn.execute("""
+            INSERT INTO settings (key, value, updated_at)
+            VALUES ('schema_version', ?, datetime('now'))
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value,
+                                           updated_at = excluded.updated_at
+        """, (str(version),))
+        logger.info("  applied %d: %s", version, description)
+
+
+def _has_setting(conn, key) -> bool:
+    """True when ``key`` has a stored row, as opposed to inheriting a default."""
+    return conn.execute(
+        "SELECT 1 FROM settings WHERE key = ?", (key,)
+    ).fetchone() is not None
+
+
+def _put_setting(conn, key, value) -> None:
+    """Write a setting from inside a migration, reusing its transaction."""
+    conn.execute("""
+        INSERT INTO settings (key, value, updated_at)
+        VALUES (?, ?, datetime('now'))
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value,
+                                       updated_at = excluded.updated_at
+    """, (key, str(value)))
 
 
 # ---------------------------------------------------------------------------
