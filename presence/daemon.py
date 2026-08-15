@@ -659,6 +659,11 @@ class PresenceDaemon:
         if previous.display_signature() != self.settings.display_signature():
             logger.info("Display settings changed — re-detecting")
             self._connect_display(force=True)
+        elif previous.brightness != self.settings.brightness:
+            # Deliberately not part of display_signature: brightness changes
+            # while somebody drags a slider, and rebuilding the panel — which
+            # re-exports the PWM channel — on every step would flicker.
+            self._apply_brightness(reason="setting")
 
     # -- presence logic ----------------------------------------------------
 
@@ -776,8 +781,14 @@ class PresenceDaemon:
         # Wake instantly, sleep slowly. A ramp on the way up delays the thing
         # somebody walked over to read; on the way down it reads as the
         # display considering rather than deciding.
-        self.display.set_power(on, force=force,
-                               fade_ms=0 if on else self.settings.pwm_fade_ms)
+        self.display.set_power(
+            on, force=force,
+            fade_ms=0 if on else self.settings.pwm_fade_ms,
+            # Waking always returns to the configured level, whatever a dim
+            # state left the panel at.
+            brightness=self.display.target_brightness(self.settings.brightness)
+            if on else None,
+        )
         now = time.monotonic()
 
         if self._display_on is True and self._display_on_since is not None:
@@ -794,6 +805,22 @@ class PresenceDaemon:
         self._display_on = on
         self._display_reason = reason
         self._write_state(force=True)
+
+    def _apply_brightness(self, scale: float = 1.0, fade_ms: int = 0,
+                          reason: str = "") -> None:
+        """Drive the panel to the resolved brightness for the current state.
+
+        Everything that wants the panel dimmer — the dim-before-off state,
+        night mode, the screensaver — asks for a ``scale`` here rather than
+        computing a level of its own. One value, one place that resolves it.
+        """
+        if self.display is None:
+            return
+        target = self.display.target_brightness(self.settings.brightness, scale)
+        if abs(target - self.display.brightness) < 0.5:
+            return
+        self.display.set_brightness(target, fade_ms=fade_ms)
+        logger.info("Brightness -> %.0f%%%s", target, f" ({reason})" if reason else "")
 
     def _accumulate_on_time(self, seconds: float) -> None:
         today = datetime.now().date()
@@ -831,6 +858,14 @@ class PresenceDaemon:
             "display_backend_is_fallback": getattr(
                 self.display, "using_fallback", True),
             "display_output": self.display.output if self.display else None,
+            # The single brightness value (§1.3). In pwm mode the hardware is
+            # already at this level; otherwise the browser applies it as an
+            # overlay, which is why it is published either way.
+            "brightness": self.display.brightness if self.display else 100.0,
+            "brightness_source": ("pwm" if (self.display and self.display.dimmable)
+                                  else "css"),
+            "off_strategy": list(self.display.strategy) if self.display else [],
+            "pwm_error": self.display.pwm_error if self.display else None,
             "sensor_kind": self.sensor.kind if self.sensor else "disconnected",
             "sensor_description": self.sensor.describe() if self.sensor else "",
             "sensor_healthy": bool(self.sensor and self.sensor.healthy),

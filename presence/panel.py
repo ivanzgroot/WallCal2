@@ -175,8 +175,36 @@ class PanelController:
             self.pwm.set_brightness(percent, fade_ms=fade_ms)
         return percent
 
-    def set_power(self, on: bool, force: bool = False, fade_ms: int = 0) -> bool:
-        """Light the panel or put it out, through every configured strategy."""
+    def target_brightness(self, base: float, scale: float = 1.0,
+                          ambient: float | None = None) -> float:
+        """Resolve the one brightness value everything converges on.
+
+        This is the only place the target is computed, and the only reason it
+        takes an ``ambient`` argument it currently never receives: adding a
+        light sensor (BH1750 over I2C) means feeding this parameter and
+        changing nothing else in the project. Everything downstream — PWM duty,
+        the browser overlay, the state file, the CLI — already reads the
+        result rather than deriving its own.
+
+        ``scale`` is what the presence states use: 1.0 awake, lower while
+        dimming or in night mode.
+        """
+        value = max(0.0, min(100.0, float(base))) * max(0.0, min(1.0, float(scale)))
+        if ambient is not None:
+            value = max(0.0, min(100.0, float(ambient)))
+        return round(value, 1)
+
+    def set_power(self, on: bool, force: bool = False, fade_ms: int = 0,
+                  brightness: float | None = None) -> bool:
+        """Light the panel or put it out, through every configured strategy.
+
+        ``brightness`` sets the level the panel comes back at without driving
+        it early: waking has to put the output up before the backlight, or the
+        first thing on screen is a lit panel showing whatever the board had
+        last.
+        """
+        if brightness is not None:
+            self._brightness = max(0.0, min(100.0, float(brightness)))
         if self._power == on and not force:
             return True
 

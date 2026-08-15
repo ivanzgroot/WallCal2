@@ -297,6 +297,13 @@ def get_display():
         "reason": state.get("display_reason"),
         "backends": state.get("display_backends", []),
         "output": state.get("display_output"),
+        # The single perceptual 0–100 value. The wall display applies it as an
+        # overlay whenever brightness_source is "css" — that is every strategy
+        # except pwm, where the hardware is already at this level.
+        "brightness": state.get("brightness", 100),
+        "brightness_source": state.get("brightness_source", "css"),
+        "off_strategy": state.get("off_strategy", []),
+        "pwm_error": state.get("pwm_error"),
         "daemon_running": state.get("daemon_running", False),
     })
 
