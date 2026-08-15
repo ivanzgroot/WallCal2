@@ -8,6 +8,7 @@ import sqlite3
 import json
 import os
 import logging
+from collections import namedtuple
 from datetime import datetime, timedelta, timezone
 from contextlib import contextmanager
 from cryptography.fernet import Fernet
@@ -222,6 +223,29 @@ def _put_setting(conn, key, value) -> None:
     """, (key, str(value)))
 
 
+#: The pin the sensor's OUT line used to default to, before the backlight
+#: claimed GPIO18. Pinned here rather than read from config so that a later
+#: change to the default cannot rewrite what this migration means.
+_LEGACY_SENSOR_GPIO_PIN = 18
+
+
+@migration(1, "keep GPIO18 for the sensor on existing installs")
+def _m1_sensor_gpio_pin(conn, fresh):
+    """Stop the GPIO18 -> GPIO23 default change from moving anyone's wiring.
+
+    An install that never opened the sensor settings has no sensor_gpio_pin
+    row, so it inherits whatever config.py says. Changing that default would
+    silently point the daemon at a pin with no wire on it. Writing the old
+    value down as a real row leaves existing hardware working and lets only
+    new installs pick up GPIO23.
+    """
+    if fresh or _has_setting(conn, "sensor_gpio_pin"):
+        return
+    _put_setting(conn, "sensor_gpio_pin", _LEGACY_SENSOR_GPIO_PIN)
+    logger.info("  sensor OUT pin pinned to GPIO%d (was the old default)",
+                _LEGACY_SENSOR_GPIO_PIN)
+
+
 # ---------------------------------------------------------------------------
 # Settings CRUD
 # ---------------------------------------------------------------------------
@@ -261,6 +285,61 @@ _SETTINGS_DEFAULTS = {
 #: Every setting the API is willing to write. Kept next to the defaults so
 #: the two never drift apart.
 SETTABLE_KEYS = frozenset(_SETTINGS_DEFAULTS)
+
+
+# ---------------------------------------------------------------------------
+# GPIO pin registry
+#
+# Every pin the project drives is a setting, and collisions are checked
+# through this one registry rather than by knowing about any particular pair.
+# A pin setting added later is covered without touching the checker.
+# ---------------------------------------------------------------------------
+
+PinUse = namedtuple("PinUse", "key label pin state")
+
+#: state is "on" (definitely driven), "maybe" (driven only in some
+#: configurations) or "off". The distinction is what stops doctor shouting
+#: about the sensor OUT pin colliding with the backlight on the UART setups
+#: where OUT is not connected to anything at all.
+_PIN_REGISTRY = (
+    ("sensor_gpio_pin", "Sensor OUT",
+     lambda s: {"gpio": "on", "auto": "maybe"}.get(
+         str(s.get("sensor_mode", "auto")).lower(), "off")),
+)
+
+
+def pin_usage(settings=None):
+    """Every configured GPIO pin, with whether it is actually in use."""
+    settings = settings if settings is not None else get_all_settings()
+    used = []
+    for key, label, state_of in _PIN_REGISTRY:
+        try:
+            pin = int(float(str(settings.get(key, "")).strip()))
+        except (TypeError, ValueError):
+            continue
+        if pin < 0:
+            continue          # negative means "not wired", the opt-out value
+        used.append(PinUse(key, label, pin, state_of(settings)))
+    return used
+
+
+def pin_conflicts(settings=None):
+    """Settings pointing at the same BCM pin, worst first.
+
+    Severity is "error" when both pins are definitely driven and "warning"
+    when at least one is only conditional — sharing a pin with something that
+    is not currently wired up is worth mentioning, not worth failing over.
+    """
+    entries = [p for p in pin_usage(settings) if p.state != "off"]
+    conflicts = []
+    for i, a in enumerate(entries):
+        for b in entries[i + 1:]:
+            if a.pin != b.pin:
+                continue
+            severity = "error" if a.state == b.state == "on" else "warning"
+            conflicts.append((severity, a, b))
+    conflicts.sort(key=lambda c: c[0] != "error")
+    return conflicts
 
 
 def get_setting(key, default=None):

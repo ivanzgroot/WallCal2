@@ -25,7 +25,12 @@ LOG_LEVEL = os.environ.get("WALLCAL_LOG_LEVEL", "INFO")
 # --- Presence sensor defaults (for Pi daemon, also settable via UI) ---
 # "auto" probes the serial ports for an LD2410 and falls back to the OUT pin.
 DEFAULT_SENSOR_MODE = "auto"          # "auto" | "uart" | "gpio" | "none"
-DEFAULT_SENSOR_GPIO_PIN = 18          # BCM numbering — LD2410C OUT pin
+# BCM numbering — LD2410C OUT pin (header pin 16). This was GPIO18 until the
+# PWM backlight arrived: GPIO18 is one of only four hardware-PWM capable pins
+# and the best default for the backlight, whereas OUT can live anywhere. The
+# two only ever collide in gpio sensor mode; UART mode leaves OUT unused.
+# Existing installs keep GPIO18 — see migration 1 in database.py.
+DEFAULT_SENSOR_GPIO_PIN = 23
 DEFAULT_SENSOR_GPIO_ACTIVE_HIGH = True
 DEFAULT_SENSOR_UART_PORT = "auto"     # or an explicit /dev/tty… path
 DEFAULT_SENSOR_UART_BAUD = 256000     # LD2410C factory default
