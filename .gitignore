@@ -1,0 +1,18 @@
+# Runtime data. The database holds CalDAV credentials — encrypted, but with a
+# key derived from SECRET_KEY, which ships with a known default. It never goes
+# into version control.
+data/
+*.db
+*.db-shm
+*.db-wal
+
+# Presence IPC, when /run/wallcal is unavailable and it falls back here
+run/
+
+# Local overrides
+.env
+
+__pycache__/
+*.py[cod]
+.venv/
+venv/

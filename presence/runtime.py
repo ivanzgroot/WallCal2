@@ -1,0 +1,193 @@
+"""
+Shared runtime state between the presence daemon and the Flask app.
+
+The two run as separate processes, so they talk through two small JSON files:
+
+    presence.json   daemon -> web   live sensor + display state
+    command.json    web -> daemon   override, manual wake, rescan requests
+
+These live in /run/wallcal (tmpfs) when it exists so the several-times-a-second
+state updates never touch the SD card. If /run is unavailable — a dev machine,
+or the daemon running before systemd created the RuntimeDirectory — they fall
+back to the project's data directory.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import tempfile
+import time
+
+_FALLBACK_SUBDIR = "run"
+_runtime_dir_cache: str | None = None
+
+
+def runtime_dir() -> str:
+    """Directory holding the IPC files, created on first use."""
+    global _runtime_dir_cache
+    if _runtime_dir_cache and os.path.isdir(_runtime_dir_cache):
+        return _runtime_dir_cache
+
+    candidates = [os.environ.get("WALLCAL_RUNTIME_DIR"), "/run/wallcal"]
+    try:
+        import config
+        candidates.append(os.path.join(config.DATA_DIR, _FALLBACK_SUBDIR))
+    except Exception:
+        candidates.append(os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "data", _FALLBACK_SUBDIR,
+        ))
+
+    for candidate in candidates:
+        if not candidate:
+            continue
+        try:
+            os.makedirs(candidate, exist_ok=True)
+            probe = os.path.join(candidate, ".write-test")
+            with open(probe, "w") as fh:
+                fh.write("1")
+            os.unlink(probe)
+        except OSError:
+            continue
+        _runtime_dir_cache = candidate
+        return candidate
+
+    return tempfile.gettempdir()
+
+
+def state_path() -> str:
+    return os.path.join(runtime_dir(), "presence.json")
+
+
+def command_path() -> str:
+    return os.path.join(runtime_dir(), "command.json")
+
+
+def _write_json(path: str, payload: dict) -> None:
+    """Atomically replace ``path`` so readers never see a half-written file."""
+    directory = os.path.dirname(path)
+    fd, tmp = tempfile.mkstemp(dir=directory, prefix=".tmp-")
+    try:
+        with os.fdopen(fd, "w") as fh:
+            json.dump(payload, fh)
+        os.replace(tmp, path)
+        try:
+            os.chmod(path, 0o664)
+        except OSError:
+            pass
+    except Exception:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def _read_json(path: str) -> dict:
+    try:
+        with open(path) as fh:
+            data = json.load(fh)
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+# ---------------------------------------------------------------------------
+# Daemon -> web
+# ---------------------------------------------------------------------------
+
+def write_state(state: dict) -> None:
+    payload = dict(state)
+    payload["updated_at"] = time.time()
+    _write_json(state_path(), payload)
+
+
+def read_state(max_age: float = 15.0) -> dict:
+    """Live state, annotated with whether the daemon still looks alive."""
+    state = _read_json(state_path())
+    if not state:
+        return {"daemon_running": False, "reason": "no state file"}
+    age = time.time() - float(state.get("updated_at", 0))
+    state["age_seconds"] = round(age, 2)
+    state["daemon_running"] = age <= max_age
+    return state
+
+
+# ---------------------------------------------------------------------------
+# Web -> daemon
+# ---------------------------------------------------------------------------
+
+DEFAULT_COMMAND = {
+    "override": "auto",   # "auto" | "on" | "off"
+    "wake_until": 0.0,    # epoch seconds; keeps the panel awake until then
+    "pause_until": 0.0,   # epoch seconds; daemon releases the sensor until then
+    "reload_seq": 0,      # bump to make the daemon re-read settings now
+    "rescan_seq": 0,      # bump to make the daemon re-detect sensor + display
+    "seq": 0,
+}
+
+
+def read_command() -> dict:
+    command = dict(DEFAULT_COMMAND)
+    command.update(_read_json(command_path()))
+    return command
+
+
+def push_command(**changes) -> dict:
+    """Merge ``changes`` into the command file and bump its sequence number."""
+    command = read_command()
+    command.update(changes)
+    command["seq"] = int(command.get("seq", 0)) + 1
+    command["updated_at"] = time.time()
+    _write_json(command_path(), command)
+    return command
+
+
+def set_override(mode: str) -> dict:
+    if mode not in ("auto", "on", "off"):
+        raise ValueError("override must be auto, on or off")
+    return push_command(override=mode, wake_until=0.0)
+
+
+def wake_for(seconds: float) -> dict:
+    """Keep the display on for at least ``seconds`` from now."""
+    return push_command(wake_until=time.time() + max(1.0, float(seconds)))
+
+
+def request_reload() -> dict:
+    return push_command(reload_seq=int(read_command().get("reload_seq", 0)) + 1)
+
+
+def request_rescan() -> dict:
+    return push_command(rescan_seq=int(read_command().get("rescan_seq", 0)) + 1)
+
+
+# ---------------------------------------------------------------------------
+# Sensor arbitration
+#
+# Only one process can hold a serial port. The daemon owns it in normal
+# operation, so command-line tools ask it to stand down first rather than
+# racing it — "device reports readiness to read but returned no data" is what
+# two readers on one UART looks like.
+# ---------------------------------------------------------------------------
+
+def request_pause(seconds: float) -> dict:
+    """Ask the daemon to release the sensor for the next ``seconds``.
+
+    Deliberately expiry-based rather than a flag: if the tool that requested
+    the pause is killed, the daemon resumes on its own.
+    """
+    return push_command(pause_until=time.time() + max(0.0, float(seconds)))
+
+
+def clear_pause() -> dict:
+    return push_command(pause_until=0.0)
+
+
+def pause_active(command=None) -> bool:
+    command = command if command is not None else read_command()
+    try:
+        return float(command.get("pause_until", 0) or 0) > time.time()
+    except (TypeError, ValueError):
+        return False

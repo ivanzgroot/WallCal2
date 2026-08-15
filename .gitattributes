@@ -1,0 +1,11 @@
+# The Pi runs these directly. A CRLF checkout gives "bad interpreter:
+# /bin/bash^M" — the failure the README's Windows note warns about. Pin LF for
+# everything textual so editing on Windows cannot reintroduce it.
+* text=auto eol=lf
+
+*.sh   text eol=lf
+*.py   text eol=lf
+*.html text eol=lf
+*.md   text eol=lf
+
+*.db   binary

@@ -1,0 +1,827 @@
+"""
+WallCal presence daemon.
+
+Reads the HLK-LD2410C (over UART, or its OUT pin over GPIO), decides whether
+somebody is standing in front of the wall calendar, and switches the display
+on or off accordingly.
+
+Everything is live-configurable: the daemon re-reads its settings from the
+same SQLite database the web UI writes to, so changing the detection distance
+in the browser takes effect within a couple of seconds without a restart.
+
+Run with:  python -m presence.daemon
+"""
+
+from __future__ import annotations
+
+import logging
+import os
+import signal
+import sys
+import threading
+import time
+from datetime import datetime, time as dtime
+
+# Allow "python -m presence.daemon" and "python presence/daemon.py" alike.
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _ROOT not in sys.path:
+    sys.path.insert(0, _ROOT)
+
+import config                                    # noqa: E402
+import database                                  # noqa: E402
+from presence import runtime                     # noqa: E402
+from presence.display import DisplayController   # noqa: E402
+from presence import ld2410                      # noqa: E402
+
+logger = logging.getLogger("wallcal.presence")
+
+SETTINGS_RELOAD_INTERVAL = 3.0      # seconds between settings re-reads
+STATE_WRITE_INTERVAL = 1.0          # seconds between routine state writes
+DISPLAY_REDETECT_INTERVAL = 15.0    # while no real backend is available
+SENSOR_RETRY_INTERVAL = 10.0        # seconds between reconnect attempts
+
+#: The radar's own "unmanned duration": how long it keeps reporting a target
+#: after the person has actually left. Keep this as short as the hardware
+#: allows. WallCal times the idle period itself, so anything the sensor holds
+#: on to is *added* to display_off_timeout rather than hidden inside it — a
+#: sensor hold of 60s plus a 60s timeout means a two-minute wait, which reads
+#: as "the screen never turns off".
+SENSOR_HOLD_SECONDS = 1
+
+
+# ---------------------------------------------------------------------------
+# Settings
+# ---------------------------------------------------------------------------
+
+def _as_bool(value, default=False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    return str(value).strip().lower() in ("1", "true", "yes", "on")
+
+
+def _as_int(value, default=0) -> int:
+    try:
+        return int(float(str(value).strip()))
+    except (TypeError, ValueError):
+        return default
+
+
+class Settings:
+    """Typed snapshot of the presence-relevant settings."""
+
+    def __init__(self, raw: dict):
+        self.raw = raw
+        g = raw.get
+
+        self.sensor_mode = str(g("sensor_mode", "auto") or "auto").lower()
+        self.gpio_pin = _as_int(g("sensor_gpio_pin"), config.DEFAULT_SENSOR_GPIO_PIN)
+        self.gpio_active_high = _as_bool(g("sensor_gpio_active_high"), True)
+        self.uart_port = str(g("sensor_uart_port") or config.DEFAULT_SENSOR_UART_PORT)
+        self.uart_baud = _as_int(g("sensor_uart_baud"), config.DEFAULT_SENSOR_UART_BAUD)
+
+        self.distance_max_cm = _as_int(g("sensor_distance_max_cm"),
+                                       config.DEFAULT_SENSOR_DISTANCE_MAX_CM)
+        self.distance_min_cm = _as_int(g("sensor_distance_min_cm"), 0)
+        self.hysteresis_cm = _as_int(g("sensor_hysteresis_cm"),
+                                     config.DEFAULT_SENSOR_HYSTERESIS_CM)
+        self.moving_energy_min = _as_int(g("sensor_moving_energy_min"),
+                                         config.DEFAULT_SENSOR_MOVING_ENERGY_MIN)
+        self.stationary_energy_min = _as_int(g("sensor_stationary_energy_min"),
+                                             config.DEFAULT_SENSOR_STATIONARY_ENERGY_MIN)
+        self.use_stationary = _as_bool(g("sensor_use_stationary"), True)
+        self.program_gates = _as_bool(g("sensor_program_gates"),
+                                      config.DEFAULT_SENSOR_PROGRAM_GATES)
+
+        self.off_timeout = max(1, _as_int(g("display_off_timeout"),
+                                          config.DEFAULT_DISPLAY_OFF_TIMEOUT))
+        self.confirm_ms = max(0, _as_int(g("presence_confirm_ms"),
+                                         config.DEFAULT_PRESENCE_CONFIRM_MS))
+        self.display_backend = str(g("display_backend", "auto") or "auto")
+        self.display_output = str(g("display_output", "auto") or "auto")
+
+        self.schedule_enabled = _as_bool(g("schedule_enabled"), False)
+        self.schedule_start = str(g("schedule_start") or config.DEFAULT_SCHEDULE_START)
+        self.schedule_end = str(g("schedule_end") or config.DEFAULT_SCHEDULE_END)
+
+    # Changing any of these means the sensor connection must be rebuilt.
+    def sensor_signature(self) -> tuple:
+        return (self.sensor_mode, self.gpio_pin, self.gpio_active_high,
+                self.uart_port, self.uart_baud)
+
+    def display_signature(self) -> tuple:
+        return (self.display_backend, self.display_output)
+
+    # The sensor-side hold is a constant now, so only the range matters here.
+    def gate_signature(self) -> tuple:
+        return (self.program_gates, self.distance_max_cm)
+
+    @classmethod
+    def load(cls) -> "Settings":
+        try:
+            return cls(database.get_all_settings())
+        except Exception as exc:
+            logger.error("Could not read settings (%s) — using defaults", exc)
+            return cls({})
+
+    def in_schedule(self, now: datetime | None = None) -> bool:
+        """True when the current time is inside the allowed display window."""
+        if not self.schedule_enabled:
+            return True
+        start = _parse_hhmm(self.schedule_start, dtime(0, 0))
+        end = _parse_hhmm(self.schedule_end, dtime(23, 59))
+        current = (now or datetime.now()).time()
+        if start == end:
+            return True
+        if start < end:
+            return start <= current < end
+        # Window wraps past midnight, e.g. 22:00 -> 06:00.
+        return current >= start or current < end
+
+
+def _parse_hhmm(text: str, fallback: dtime) -> dtime:
+    try:
+        hour, _, minute = str(text).partition(":")
+        return dtime(int(hour) % 24, int(minute or 0) % 60)
+    except (TypeError, ValueError):
+        return fallback
+
+
+# ---------------------------------------------------------------------------
+# Sensor sources
+# ---------------------------------------------------------------------------
+
+class SensorSource:
+    kind = "none"
+
+    def open(self) -> None:
+        pass
+
+    def close(self) -> None:
+        pass
+
+    def sample(self, timeout: float = 0.5):
+        """Return a dict describing the latest observation, or None."""
+        raise NotImplementedError
+
+    @property
+    def healthy(self) -> bool:
+        return True
+
+    def describe(self) -> str:
+        return self.kind
+
+
+class UartSensor(SensorSource):
+    """Full LD2410C telemetry: state, distance and energy per target type."""
+
+    kind = "uart"
+
+    def __init__(self, port: str, baud: int):
+        self.port = port
+        self.baud = baud
+        self._radar = None
+        self._last_ok = 0.0
+        self._frames = 0
+
+    def open(self) -> None:
+        self._radar = ld2410.LD2410(self.port, self.baud, timeout=0.3).open()
+        self._last_ok = time.monotonic()
+        logger.info("LD2410 connected on %s @ %d", self.port, self.baud)
+
+    def close(self) -> None:
+        if self._radar is not None:
+            self._radar.close()
+            self._radar = None
+
+    def sample(self, timeout: float = 0.5):
+        if self._radar is None:
+            return None
+        reading = self._radar.read(max_wait=timeout)
+        if reading is None:
+            return None
+        self._last_ok = time.monotonic()
+        self._frames += 1
+        return {
+            "source": "uart",
+            "target_state": reading.target_state,
+            "state_name": reading.state_name,
+            "moving_distance_cm": reading.moving_distance_cm,
+            "moving_energy": reading.moving_energy,
+            "stationary_distance_cm": reading.stationary_distance_cm,
+            "stationary_energy": reading.stationary_energy,
+            "detection_distance_cm": reading.detection_distance_cm,
+            "distance_cm": reading.distance_cm,
+            "light": reading.light,
+            "out_pin": reading.out_pin,
+            "frames": self._frames,
+        }
+
+    @property
+    def healthy(self) -> bool:
+        return self._radar is not None and (time.monotonic() - self._last_ok) < 5.0
+
+    def describe(self) -> str:
+        return f"UART {self.port} @ {self.baud}"
+
+    def program_gates(self, max_distance_cm: int, unmanned_duration_s: int) -> bool:
+        """Push the distance threshold into the sensor's own gate config.
+
+        Gates are 0.75 m wide so this is coarse; the daemon still applies the
+        exact centimetre threshold in software. Doing both means the sensor
+        stops reporting far-away targets at all, which cuts false wakes.
+        """
+        if self._radar is None:
+            return False
+        gate = ld2410.cm_to_gate(max_distance_cm)
+        try:
+            self._radar.set_max_gates(gate, gate, unmanned_duration_s)
+            logger.info("Sensor gates set to %d (~%d cm), hold %ds",
+                        gate, ld2410.gate_to_cm(gate), unmanned_duration_s)
+            return True
+        except ld2410.LD2410Error as exc:
+            logger.warning("Could not program sensor gates: %s", exc)
+            return False
+
+
+class GpioSensor(SensorSource):
+    """The LD2410C OUT pin — a plain presence/no-presence level.
+
+    No distance information is available in this mode, so the distance
+    threshold is enforced by the sensor's own gate configuration instead
+    (see 'wallcal.sh sensor gates').
+    """
+
+    kind = "gpio"
+
+    def __init__(self, pin: int, active_high: bool = True):
+        self.pin = int(pin)
+        self.active_high = bool(active_high)
+        self._reader = None
+        self._impl = "none"
+
+    def open(self) -> None:
+        self._reader, self._impl = _make_gpio_reader(self.pin)
+        logger.info("GPIO presence input on BCM %d via %s", self.pin, self._impl)
+
+    def close(self) -> None:
+        closer = getattr(self._reader, "close", None)
+        if callable(closer):
+            try:
+                closer()
+            except Exception:
+                pass
+        self._reader = None
+
+    def sample(self, timeout: float = 0.5):
+        if self._reader is None:
+            return None
+        try:
+            level = bool(self._reader())
+        except Exception as exc:
+            logger.warning("GPIO read failed: %s", exc)
+            return None
+        detected = level if self.active_high else not level
+        time.sleep(min(timeout, 0.1))  # OUT is a level, no need to spin
+        return {
+            "source": "gpio",
+            "target_state": 1 if detected else 0,
+            "state_name": "detected" if detected else "none",
+            "gpio_level": level,
+            "distance_cm": None,
+            "moving_energy": 100 if detected else 0,
+            "stationary_energy": 0,
+        }
+
+    @property
+    def healthy(self) -> bool:
+        return self._reader is not None
+
+    def describe(self) -> str:
+        return f"GPIO BCM{self.pin} ({self._impl})"
+
+
+class NullSensor(SensorSource):
+    """No sensor: the display simply stays on."""
+
+    kind = "none"
+
+    def sample(self, timeout: float = 0.5):
+        time.sleep(min(timeout, 0.5))
+        return {"source": "none", "target_state": 1, "state_name": "always-on",
+                "distance_cm": None}
+
+    def describe(self) -> str:
+        return "no sensor (display always on)"
+
+
+def _make_gpio_reader(pin: int):
+    """Return ``(callable -> bool, implementation_name)`` for a BCM pin.
+
+    Tries gpiozero, then lgpio, then RPi.GPIO — whichever this Pi OS release
+    happens to ship. Each returns a zero-argument callable.
+    """
+    try:
+        from gpiozero import DigitalInputDevice
+        device = DigitalInputDevice(pin, pull_up=False)
+        reader = lambda: device.value == 1  # noqa: E731
+        reader.close = device.close
+        return reader, "gpiozero"
+    except Exception as exc:
+        logger.debug("gpiozero unavailable: %s", exc)
+
+    try:
+        import lgpio
+        handle = lgpio.gpiochip_open(0)
+        lgpio.gpio_claim_input(handle, pin)
+        reader = lambda: lgpio.gpio_read(handle, pin) == 1  # noqa: E731
+        reader.close = lambda: lgpio.gpiochip_close(handle)
+        return reader, "lgpio"
+    except Exception as exc:
+        logger.debug("lgpio unavailable: %s", exc)
+
+    try:
+        import RPi.GPIO as GPIO
+        GPIO.setmode(GPIO.BCM)
+        GPIO.setwarnings(False)
+        GPIO.setup(pin, GPIO.IN)
+        reader = lambda: GPIO.input(pin) == 1  # noqa: E731
+        reader.close = GPIO.cleanup
+        return reader, "RPi.GPIO"
+    except Exception as exc:
+        logger.debug("RPi.GPIO unavailable: %s", exc)
+
+    raise RuntimeError(
+        "no usable GPIO library found — install python3-gpiozero or python3-lgpio"
+    )
+
+
+def build_sensor(settings: Settings) -> SensorSource:
+    """Create and open the sensor source described by the settings.
+
+    ``sensor_mode`` may be ``uart``, ``gpio``, ``none`` or ``auto``; ``auto``
+    looks for a radar on the serial ports first and falls back to the OUT pin.
+    """
+    mode = settings.sensor_mode
+
+    def _gpio() -> SensorSource:
+        sensor = GpioSensor(settings.gpio_pin, settings.gpio_active_high)
+        sensor.open()
+        return sensor
+
+    if mode == "none":
+        return NullSensor()
+
+    if mode in ("uart", "auto"):
+        port, baud = settings.uart_port, settings.uart_baud
+        if mode == "auto" or not port or port == "auto":
+            found_port, found_baud, _ = ld2410.autodetect(seconds=0.8)
+            if found_port:
+                port, baud = found_port, found_baud
+            elif mode == "auto":
+                logger.info("No LD2410 on serial — falling back to GPIO mode")
+                return _gpio()
+        sensor = UartSensor(port, baud)
+        try:
+            sensor.open()
+            return sensor
+        except Exception as exc:
+            if mode == "auto":
+                logger.warning("UART sensor failed (%s) — trying GPIO", exc)
+                return _gpio()
+            raise
+
+    return _gpio()
+
+
+# ---------------------------------------------------------------------------
+# Daemon
+# ---------------------------------------------------------------------------
+
+class PresenceDaemon:
+    def __init__(self):
+        self.settings = Settings.load()
+        self.sensor: SensorSource | None = None
+        self.display: DisplayController | None = None
+
+        self._stop = threading.Event()
+        self._started_at = time.time()
+        self._last_settings_load = 0.0
+        self._last_state_write = 0.0
+        self._last_sensor_attempt = 0.0
+        self._last_display_detect = 0.0
+        self._sensor_error: str | None = None
+
+        self._paused = False
+        self._present = False
+        self._present_cause: str | None = None
+        self._present_since: float | None = None
+        self._last_present_at: float | None = None
+        self._last_reading: dict = {}
+        self._display_on: bool | None = None
+        self._display_on_since: float | None = None
+        self._on_seconds_today = 0.0
+        self._on_seconds_day = datetime.now().date()
+        self._wake_count = 0
+        self._command_seq = -1
+        self._reload_seq = 0
+        self._rescan_seq = 0
+        self._gate_signature: tuple | None = None
+
+    # -- lifecycle ---------------------------------------------------------
+
+    def stop(self, *_args) -> None:
+        self._stop.set()
+
+    def run(self) -> int:
+        signal.signal(signal.SIGTERM, self.stop)
+        signal.signal(signal.SIGINT, self.stop)
+
+        database.init_db()
+        self._connect_display(force=True)
+        self._connect_sensor()
+
+        # Start awake: whoever just booted or restarted the service wants to
+        # see the calendar, not a black panel.
+        self._apply_display(True, reason="startup")
+
+        logger.info("Presence daemon ready — sensor: %s | display: %s",
+                    self.sensor.describe() if self.sensor else "none",
+                    ",".join(self.display.backend_names) if self.display else "none")
+
+        while not self._stop.is_set():
+            try:
+                self._tick()
+            except Exception as exc:
+                logger.exception("Unhandled error in main loop: %s", exc)
+                self._stop.wait(2.0)
+
+        self._shutdown()
+        return 0
+
+    def _shutdown(self) -> None:
+        logger.info("Shutting down — leaving the display switched on")
+        try:
+            self._apply_display(True, reason="shutdown", force=True)
+        except Exception:
+            pass
+        if self.sensor:
+            self.sensor.close()
+        self._write_state(final=True)
+
+    # -- wiring ------------------------------------------------------------
+
+    def _connect_display(self, force: bool = False) -> None:
+        signature = self.settings.display_signature()
+        if self.display is None or force or getattr(self, "_display_sig", None) != signature:
+            self.display = DisplayController(
+                backend_spec=self.settings.display_backend,
+                output=self.settings.display_output,
+            )
+            self._display_sig = signature
+            self._display_on = None
+        self._last_display_detect = time.monotonic()
+
+    def _connect_sensor(self) -> None:
+        self._last_sensor_attempt = time.monotonic()
+        if self.sensor is not None:
+            self.sensor.close()
+            self.sensor = None
+        try:
+            self.sensor = build_sensor(self.settings)
+            self._sensor_error = None
+            self._gate_signature = None
+        except Exception as exc:
+            self._sensor_error = str(exc)
+            logger.error("Sensor unavailable: %s", exc)
+            self.sensor = None
+
+    def _maybe_program_gates(self) -> None:
+        """Keep the sensor's own gate config in step with the UI setting."""
+        if not isinstance(self.sensor, UartSensor) or not self.settings.program_gates:
+            return
+        signature = self.settings.gate_signature()
+        if signature == self._gate_signature:
+            return
+        self._gate_signature = signature
+        self.sensor.program_gates(self.settings.distance_max_cm, SENSOR_HOLD_SECONDS)
+
+    # -- main loop ---------------------------------------------------------
+
+    def _tick(self) -> None:
+        now = time.monotonic()
+
+        self._poll_commands()
+
+        # A command-line tool wants the sensor. Let go of it — two readers on
+        # one UART produce nothing but errors for both.
+        if runtime.pause_active(getattr(self, "_command", None)):
+            just_paused = not self._paused
+            if just_paused:
+                logger.info("Paused by a command-line tool — releasing the sensor")
+                self._paused = True
+            if self.sensor is not None:
+                self.sensor.close()
+                self.sensor = None
+            self._decide_display()
+            # Publish the transition immediately rather than on the next
+            # throttled write — the waiting tool is watching for this flag
+            # before it opens the port.
+            self._write_state(force=just_paused)
+            self._stop.wait(0.5)
+            return
+
+        if self._paused:
+            self._paused = False
+            logger.info("Resuming — reconnecting the sensor")
+            self._connect_sensor()
+            self._write_state(force=True)
+
+        if now - self._last_settings_load >= SETTINGS_RELOAD_INTERVAL:
+            self._reload_settings()
+
+        # This service starts at multi-user.target, well before the compositor.
+        # Anything session-less (vcgencmd, backlight, fbcon) is already
+        # answering by then and would otherwise be kept for good — so keep
+        # re-probing until a session-native backend becomes available.
+        if self.display is not None and self.display.using_fallback \
+                and now - self._last_display_detect >= DISPLAY_REDETECT_INTERVAL:
+            previous_backends = list(self.display.backend_names)
+            previous_state = self._display_on
+            self._connect_display(force=True)
+            if self.display.backend_names != previous_backends:
+                logger.info("Display backend upgraded: %s -> %s",
+                            ", ".join(previous_backends) or "none",
+                            ", ".join(self.display.backend_names))
+            if previous_state is not None:
+                self._apply_display(previous_state, reason="redetect", force=True)
+
+        if self.sensor is None or not self.sensor.healthy:
+            if now - self._last_sensor_attempt >= SENSOR_RETRY_INTERVAL:
+                logger.info("Reconnecting sensor…")
+                self._connect_sensor()
+
+        reading = None
+        if self.sensor is not None:
+            try:
+                reading = self.sensor.sample(timeout=0.5)
+            except Exception as exc:
+                self._sensor_error = str(exc)
+                logger.warning("Sensor sample failed: %s", exc)
+                self.sensor.close()
+                self.sensor = None
+        else:
+            self._stop.wait(0.5)
+
+        self._maybe_program_gates()
+
+        if reading is not None:
+            self._last_reading = reading
+            self._evaluate(reading)
+
+        self._decide_display()
+        self._write_state()
+
+    def _poll_commands(self) -> None:
+        command = runtime.read_command()
+        seq = int(command.get("seq", 0))
+        self._command = command
+        if seq == self._command_seq:
+            return
+        self._command_seq = seq
+
+        reload_seq = int(command.get("reload_seq", 0))
+        if reload_seq != self._reload_seq:
+            self._reload_seq = reload_seq
+            self._reload_settings(force=True)
+
+        rescan_seq = int(command.get("rescan_seq", 0))
+        if rescan_seq != self._rescan_seq:
+            self._rescan_seq = rescan_seq
+            logger.info("Rescan requested — re-detecting sensor and display")
+            self._connect_display(force=True)
+            self._connect_sensor()
+
+    def _reload_settings(self, force: bool = False) -> None:
+        self._last_settings_load = time.monotonic()
+        previous = self.settings
+        self.settings = Settings.load()
+
+        if force or previous.sensor_signature() != self.settings.sensor_signature():
+            if not force:
+                logger.info("Sensor settings changed — reconnecting")
+            self._connect_sensor()
+        if previous.display_signature() != self.settings.display_signature():
+            logger.info("Display settings changed — re-detecting")
+            self._connect_display(force=True)
+
+    # -- presence logic ----------------------------------------------------
+
+    def _evaluate(self, reading: dict) -> None:
+        now = time.monotonic()
+        raw = self._raw_present(reading)
+
+        if raw:
+            if self._present_since is None:
+                self._present_since = now
+            self._last_present_at = now
+            # Only count as present once it has held for the confirm window;
+            # this filters single-frame radar glitches.
+            if (now - self._present_since) * 1000.0 >= self.settings.confirm_ms:
+                self._present = True
+        else:
+            self._present_since = None
+            self._present = False
+
+    def _raw_present(self, reading: dict) -> bool:
+        """Decide presence, recording which rule fired.
+
+        The cause is published in the state file: "the screen never sleeps" is
+        almost always a stationary-target false positive, and knowing that
+        without a logic trace saves a lot of guessing.
+        """
+        settings = self.settings
+        self._present_cause = None
+
+        if reading.get("source") == "none":
+            self._present_cause = "no-sensor"
+            return True
+        if reading.get("source") == "gpio":
+            if reading.get("target_state") == 1:
+                self._present_cause = "gpio-pin"
+                return True
+            return False
+
+        state = reading.get("target_state", 0)
+        if state == ld2410.TARGET_NONE:
+            return False
+
+        # While already present, tolerate an extra margin before dropping out
+        # so somebody hovering at the threshold does not make it flicker.
+        limit = settings.distance_max_cm + (settings.hysteresis_cm if self._present else 0)
+        floor = settings.distance_min_cm
+
+        def within(distance):
+            return distance and floor <= distance <= limit
+
+        if state in (ld2410.TARGET_MOVING, ld2410.TARGET_BOTH):
+            if within(reading.get("moving_distance_cm")) and \
+                    reading.get("moving_energy", 0) >= settings.moving_energy_min:
+                self._present_cause = "moving"
+                return True
+
+        if settings.use_stationary and state in (ld2410.TARGET_STATIONARY,
+                                                 ld2410.TARGET_BOTH):
+            if within(reading.get("stationary_distance_cm")) and \
+                    reading.get("stationary_energy", 0) >= settings.stationary_energy_min:
+                self._present_cause = "stationary"
+                return True
+
+        return False
+
+    def _decide_display(self) -> None:
+        command = getattr(self, "_command", runtime.DEFAULT_COMMAND)
+        override = str(command.get("override", "auto"))
+        wake_until = float(command.get("wake_until", 0) or 0)
+        now = time.monotonic()
+
+        if override == "on":
+            self._apply_display(True, reason="override:on")
+            return
+        if override == "off":
+            self._apply_display(False, reason="override:off")
+            return
+
+        if wake_until and time.time() < wake_until:
+            self._apply_display(True, reason="manual-wake")
+            return
+
+        # While a tool holds the sensor we have no presence data, so keep the
+        # panel on rather than blanking it under whoever is calibrating.
+        if self._paused:
+            self._apply_display(True, reason="paused-for-tools")
+            return
+
+        if not self.settings.in_schedule():
+            self._apply_display(False, reason="outside-schedule")
+            return
+
+        if self._present:
+            self._apply_display(True, reason="presence")
+            return
+
+        if self._last_present_at is None:
+            # Nothing has ever been seen — hold whatever we already are, but
+            # default to off once the grace period after startup has passed.
+            if time.time() - self._started_at > self.settings.off_timeout:
+                self._apply_display(False, reason="no-presence")
+            return
+
+        idle = now - self._last_present_at
+        self._apply_display(idle < self.settings.off_timeout,
+                            reason="idle" if idle >= self.settings.off_timeout
+                            else "presence-hold")
+
+    def _apply_display(self, on: bool, reason: str = "", force: bool = False) -> None:
+        if self.display is None:
+            return
+        if self._display_on == on and not force:
+            return
+
+        self.display.set_power(on, force=force)
+        now = time.monotonic()
+
+        if self._display_on is True and self._display_on_since is not None:
+            self._accumulate_on_time(now - self._display_on_since)
+        if on:
+            self._display_on_since = now
+            if self._display_on is False:
+                self._wake_count += 1
+        else:
+            self._display_on_since = None
+
+        if self._display_on != on:
+            logger.info("Display %s (%s)", "ON" if on else "OFF", reason)
+        self._display_on = on
+        self._display_reason = reason
+        self._write_state(force=True)
+
+    def _accumulate_on_time(self, seconds: float) -> None:
+        today = datetime.now().date()
+        if today != self._on_seconds_day:
+            self._on_seconds_day = today
+            self._on_seconds_today = 0.0
+        self._on_seconds_today += max(0.0, seconds)
+
+    # -- state publishing --------------------------------------------------
+
+    def _write_state(self, force: bool = False, final: bool = False) -> None:
+        now = time.monotonic()
+        if not force and not final and (now - self._last_state_write) < STATE_WRITE_INTERVAL:
+            return
+        self._last_state_write = now
+
+        on_today = self._on_seconds_today
+        if self._display_on and self._display_on_since is not None:
+            on_today += now - self._display_on_since
+
+        idle = None
+        if self._last_present_at is not None:
+            idle = round(now - self._last_present_at, 1)
+
+        state = {
+            "present": self._present,
+            "present_cause": self._present_cause,
+            "paused": self._paused,
+            "idle_seconds": idle,
+            "display_on": self._display_on,
+            "display_reason": getattr(self, "_display_reason", ""),
+            "display_backends": self.display.backend_names if self.display else [],
+            # getattr: state publishing sits in the main loop and must never
+            # be the thing that raises.
+            "display_backend_is_fallback": getattr(
+                self.display, "using_fallback", True),
+            "display_output": self.display.output if self.display else None,
+            "sensor_kind": self.sensor.kind if self.sensor else "disconnected",
+            "sensor_description": self.sensor.describe() if self.sensor else "",
+            "sensor_healthy": bool(self.sensor and self.sensor.healthy),
+            "sensor_error": self._sensor_error,
+            "reading": self._last_reading,
+            "thresholds": {
+                "distance_max_cm": self.settings.distance_max_cm,
+                "distance_min_cm": self.settings.distance_min_cm,
+                "hysteresis_cm": self.settings.hysteresis_cm,
+                "off_timeout": self.settings.off_timeout,
+                "moving_energy_min": self.settings.moving_energy_min,
+                "stationary_energy_min": self.settings.stationary_energy_min,
+            },
+            "schedule": {
+                "enabled": self.settings.schedule_enabled,
+                "start": self.settings.schedule_start,
+                "end": self.settings.schedule_end,
+                "active_now": self.settings.in_schedule(),
+            },
+            "override": str(getattr(self, "_command", {}).get("override", "auto")),
+            "wake_count": self._wake_count,
+            "display_on_seconds_today": round(on_today, 1),
+            "uptime_seconds": round(time.time() - self._started_at, 1),
+            "stopped": final,
+        }
+        try:
+            runtime.write_state(state)
+        except OSError as exc:
+            logger.debug("Could not write state file: %s", exc)
+
+
+def main() -> int:
+    logging.basicConfig(
+        level=getattr(logging, str(config.LOG_LEVEL).upper(), logging.INFO),
+        format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+    return PresenceDaemon().run()
+
+
+if __name__ == "__main__":
+    sys.exit(main())
