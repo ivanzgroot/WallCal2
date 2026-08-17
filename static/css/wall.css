@@ -266,7 +266,8 @@
     position: fixed;
     right: 0; bottom: 0;
     width: 64px; height: 64px;
-    background: none; border: none;
+    display: flex; align-items: center; justify-content: center;
+    background: none; border: none; text-decoration: none;
     color: var(--type-lo);
     opacity: 0.18;
     font-size: 20px;
