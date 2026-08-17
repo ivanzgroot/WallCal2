@@ -537,6 +537,22 @@ step_venv() {
   ok "dependencies installed"
 }
 
+# Anything under data/ has to belong to RUN_USER: the web app, the poller and
+# the presence daemon all run as them and all write here.
+repair_data_ownership() {
+  local owner group
+  group="$(id -gn "$RUN_USER" 2>/dev/null || echo "$RUN_USER")"
+  local path
+  for path in "$DATA_DIR" "$DATA_DIR"/*; do
+    [[ -e "$path" ]] || continue
+    owner="$(stat -c '%U' "$path" 2>/dev/null || echo "$RUN_USER")"
+    if [[ "$owner" != "$RUN_USER" ]]; then
+      as_root chown -R "$RUN_USER:$group" "$path"
+      dbg "chowned $path from $owner to $RUN_USER"
+    fi
+  done
+}
+
 step_database() {
   step_header "Database"
   as_user mkdir -p "$DATA_DIR" "$BACKUP_DIR"
@@ -1807,8 +1823,25 @@ print(' '.join(m for m in mods if importlib.util.find_spec(m) is None))
 " 2>/dev/null || echo "?")"
   if [[ -z "$missing_mods" ]]; then
     chk ok "python dependencies importable"
+  elif (( FIX_MODE )); then
+    # A virtualenv that exists but cannot import is the "No module named
+    # flask" restart loop. Rebuilding is the reliable repair.
+    step_venv >/dev/null 2>&1       && chk ok "virtualenv rebuilt — modules importable now"       || chk fail "virtualenv rebuild failed" "" "see $INSTALL_LOG"
   else
-    chk fail "missing modules: $missing_mods" "" "./wallcal.sh install --only venv"
+    chk fail "missing modules: $missing_mods"       "the virtualenv exists but cannot import them"       "./wallcal.sh doctor --fix   (rebuilds the virtualenv)"
+  fi
+
+  # The services run as RUN_USER, so a root-owned database is fatal to every
+  # write even though the file looks perfectly healthy.
+  local db_owner=""
+  [[ -f "$(db_path)" ]] && db_owner="$(stat -c '%U' "$(db_path)" 2>/dev/null || true)"
+  if [[ -z "$db_owner" || "$db_owner" == "$RUN_USER" ]]; then
+    :
+  elif (( FIX_MODE )); then
+    repair_data_ownership
+    chk ok "database ownership repaired ($db_owner -> $RUN_USER)"
+  else
+    chk fail "database belongs to $db_owner, not $RUN_USER"       "every write fails with 'attempt to write a readonly database'"       "./wallcal.sh doctor --fix"
   fi
   if [[ -f "$(db_path)" ]]; then
     local integrity; integrity="$(py -c "
