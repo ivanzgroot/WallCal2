@@ -282,3 +282,81 @@
     .near-body { grid-template-columns: 1fr; }
     .rail { display: none; }
 }
+
+/* ================================================================
+   WIDGETS
+
+   Every slot keeps its grid row whether or not it is filled, so a
+   widget appearing or withdrawing never moves the ones around it.
+   ================================================================ */
+.rail { display: grid; grid-template-rows: auto auto auto 1fr; gap: 2vh; }
+.slot { min-height: 0; }
+.slot[hidden] { display: block; visibility: hidden; }
+
+/* Time-of-day hides by fading, reusing the density crossfade rather than
+   inventing a second transition. */
+.tod-hidden { opacity: 0; pointer-events: none; transition: opacity var(--crossfade) ease; }
+
+/* --- ÖPNV: a departure board --- */
+.dep {
+    display: grid;
+    grid-template-columns: 3.4vw 1fr auto;
+    gap: 0.8vw;
+    align-items: baseline;
+    font-size: var(--near-body);
+    margin-bottom: 0.9vh;
+}
+.dep .line { font-weight: 600; color: var(--type-hi); }
+.dep .dir  { color: var(--type-lo); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dep .when { font-variant-numeric: tabular-nums; color: var(--type-hi); }
+.dep .when.soon { color: var(--now); }
+.dep .late { color: var(--alert); }
+.dep.cancelled { opacity: 0.55; }
+.dep.cancelled .dir, .dep.cancelled .line { text-decoration: line-through; }
+
+/* --- Weather: actionable only, never a forecast grid --- */
+.wx-head { font-size: var(--near-body); margin-bottom: 0.8vh; }
+.wx-hours { display: flex; gap: 0.7vw; margin-bottom: 0.8vh; }
+.wx-h {
+    font-size: var(--near-meta);
+    color: var(--type-lo);
+    text-align: center;
+    line-height: 1.2;
+}
+.wx-h b { display: block; color: var(--type-hi); font-weight: 400; }
+.wx-h.wet b { color: #6FA8DC; }
+.wx-tomorrow { font-size: var(--near-meta); color: var(--type-lo); }
+
+/* --- Travel time: turns the calendar into a leave-now prompt --- */
+.travel { font-size: var(--near-body); color: var(--type-lo); margin-top: 0.8vh; }
+.travel b { color: var(--alert); font-weight: 500; }
+.travel.late b { color: var(--danger); }
+#farTravel { font-size: var(--far-body); margin-top: 1.4vh; }
+
+/* --- Abfall --- */
+.near-bin { display: flex; align-items: center; gap: 0.5vw; font-size: var(--near-body); }
+.near-bin i, .far-bin i { border-radius: 1px; display: block; flex: none; }
+.near-bin i { width: 0.4vw; height: 1.8vh; }
+.near-bin .sub, .far-bin .sub { color: var(--type-lo); }
+
+/* --- QR: small and quiet --- */
+.qr { margin-left: auto; opacity: 0.55; }
+.qr img { display: block; width: 100%; height: 100%; }
+
+/* ================================================================
+   SCREENSAVER — active when the panel can never switch off
+   ================================================================ */
+#app[data-saver="clock"] #near,
+#app[data-saver="clock"] #far .far-next,
+#app[data-saver="clock"] #far .far-wx,
+#app[data-saver="clock"] #far .travel,
+#app[data-saver="clock"] #far .far-bin { opacity: 0; pointer-events: none; }
+#app[data-saver="clock"] #far { opacity: 1; }
+
+#app[data-saver="blank"] #drift { opacity: 0; }
+
+/* dim_dashboard is the FAR layout at the screensaver brightness — the
+   brightness itself comes from the daemon, so there is nothing to do but
+   make sure FAR is the layer showing. */
+#app[data-saver="dim_dashboard"] #far { opacity: 1; }
+#app[data-saver="dim_dashboard"] #near { opacity: 0; }

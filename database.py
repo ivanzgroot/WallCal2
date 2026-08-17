@@ -123,6 +123,20 @@ def init_db():
                 ON events_cache(dtstart);
             CREATE INDEX IF NOT EXISTS idx_events_calendar
                 ON events_cache(calendar_id);
+
+            -- Every external feed caches here on fetch, and the page always
+            -- renders from the cache. A failed fetch keeps the last good
+            -- payload and records why, so the wall shows slightly old data
+            -- with a small marker rather than an error nobody can act on.
+            CREATE TABLE IF NOT EXISTS feed_cache (
+                feed        TEXT PRIMARY KEY,
+                payload     TEXT NOT NULL DEFAULT '',
+                fetched_at  TEXT NOT NULL DEFAULT (datetime('now')),
+                ttl_seconds INTEGER NOT NULL DEFAULT 300,
+                ok          INTEGER NOT NULL DEFAULT 1,
+                error       TEXT NOT NULL DEFAULT '',
+                tried_at    TEXT NOT NULL DEFAULT (datetime('now'))
+            );
         """)
         _run_migrations(conn)
     logger.info("Database initialized at %s", config.DATABASE_PATH)
@@ -341,6 +355,59 @@ _SETTINGS_DEFAULTS = {
     "schedule_end": config.DEFAULT_SCHEDULE_END,
     "night_mode": config.DEFAULT_NIGHT_MODE,
     "night_brightness": str(config.DEFAULT_NIGHT_BRIGHTNESS),
+    # Screensaver (off-strategy "none")
+    "screensaver_style": config.DEFAULT_SCREENSAVER_STYLE,
+    "screensaver_idle_seconds": str(config.DEFAULT_SCREENSAVER_IDLE_SECONDS),
+    "screensaver_brightness": str(config.DEFAULT_SCREENSAVER_BRIGHTNESS),
+    # Anticipatory wake
+    "prewake_enabled": str(config.DEFAULT_PREWAKE_ENABLED).lower(),
+    "prewake_lead_minutes": str(config.DEFAULT_PREWAKE_LEAD_MINUTES),
+    "prewake_calendars": config.DEFAULT_PREWAKE_CALENDARS,
+    "prewake_timed_only": str(config.DEFAULT_PREWAKE_TIMED_ONLY).lower(),
+    "prewake_allday_at": config.DEFAULT_PREWAKE_ALLDAY_AT,
+    "prewake_hold_minutes": str(config.DEFAULT_PREWAKE_HOLD_MINUTES),
+    # Widget visibility
+    "widget_abfall": config.DEFAULT_WIDGET_VISIBILITY,
+    "widget_transit": config.DEFAULT_WIDGET_VISIBILITY,
+    "widget_weather": config.DEFAULT_WIDGET_VISIBILITY,
+    "widget_travel": config.DEFAULT_WIDGET_VISIBILITY,
+    "widget_qr": config.DEFAULT_WIDGET_VISIBILITY,
+    # Abfall
+    "abfall_calendar_id": config.DEFAULT_ABFALL_CALENDAR_ID,
+    "abfall_from_hour": config.DEFAULT_ABFALL_FROM_HOUR,
+    "abfall_until_hour": config.DEFAULT_ABFALL_UNTIL_HOUR,
+    "abfall_fractions": config.DEFAULT_ABFALL_FRACTIONS,
+    # Transit
+    "transit_provider": config.DEFAULT_TRANSIT_PROVIDER,
+    "transit_station_id": config.DEFAULT_TRANSIT_STATION_ID,
+    "transit_station_name": config.DEFAULT_TRANSIT_STATION_NAME,
+    "transit_count": str(config.DEFAULT_TRANSIT_COUNT),
+    "transit_refresh_seconds": str(config.DEFAULT_TRANSIT_REFRESH_SECONDS),
+    "transit_relative_below_min": str(config.DEFAULT_TRANSIT_RELATIVE_BELOW_MIN),
+    "transit_filter_lines": config.DEFAULT_TRANSIT_FILTER_LINES,
+    "transit_filter_directions": config.DEFAULT_TRANSIT_FILTER_DIRECTIONS,
+    "transit_windows": config.DEFAULT_TRANSIT_WINDOWS,
+    # Weather
+    "weather_lat": config.DEFAULT_WEATHER_LAT,
+    "weather_lon": config.DEFAULT_WEATHER_LON,
+    "weather_place": config.DEFAULT_WEATHER_PLACE,
+    "weather_units": config.DEFAULT_WEATHER_UNITS,
+    "weather_refresh_seconds": str(config.DEFAULT_WEATHER_REFRESH_SECONDS),
+    # Travel time
+    "home_lat": config.DEFAULT_HOME_LAT,
+    "home_lon": config.DEFAULT_HOME_LON,
+    "travel_window_minutes": str(config.DEFAULT_TRAVEL_WINDOW_MINUTES),
+    "travel_buffer_minutes": str(config.DEFAULT_TRAVEL_BUFFER_MINUTES),
+    "travel_refresh_seconds": str(config.DEFAULT_TRAVEL_REFRESH_SECONDS),
+    # QR
+    "qr_size": str(config.DEFAULT_QR_SIZE),
+    # Time-of-day layout
+    "timeofday_enabled": str(config.DEFAULT_TIMEOFDAY_ENABLED).lower(),
+    "timeofday_morning_until": config.DEFAULT_TIMEOFDAY_MORNING_UNTIL,
+    "timeofday_evening_from": config.DEFAULT_TIMEOFDAY_EVENING_FROM,
+    "timeofday_morning": config.DEFAULT_TIMEOFDAY_MORNING,
+    "timeofday_midday": config.DEFAULT_TIMEOFDAY_MIDDAY,
+    "timeofday_evening": config.DEFAULT_TIMEOFDAY_EVENING,
 }
 
 #: Every setting the API is willing to write. Kept next to the defaults so
@@ -582,10 +649,17 @@ def cache_events(calendar_id, events):
     logger.debug("Cached %d events for calendar %d", len(events), calendar_id)
 
 
-def get_cached_events(days=30):
-    """Return all cached events within the next N days from enabled calendars."""
+def get_cached_events(days=30, exclude_calendar_ids=None):
+    """Cached events for the next N days, from enabled calendars.
+
+    ``exclude_calendar_ids`` keeps the Abfall source out of the normal agenda:
+    it is a CalDAV calendar like any other, but bin collections belong in
+    their own widget rather than mixed into the day's events.
+    """
     now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
     end = (datetime.now(timezone.utc) + timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%S")
+
+    skip = {int(i) for i in (exclude_calendar_ids or []) if str(i).strip().isdigit()}
 
     with get_db() as conn:
         rows = conn.execute("""
@@ -617,6 +691,8 @@ def get_cached_events(days=30):
     seen = set()
     result = []
     for row in list(rows) + list(allday_rows):
+        if row["calendar_id"] in skip:
+            continue
         key = (row["uid"], row["calendar_id"], row["recurrence_id"])
         if key not in seen:
             seen.add(key)
@@ -629,6 +705,126 @@ def get_cached_events(days=30):
 
     result.sort(key=lambda x: x["dtstart"])
     return result
+
+
+# ---------------------------------------------------------------------------
+# Feed cache
+#
+# The CalDAV cache set the standard: the page renders from SQLite, always, and
+# a network failure is invisible on the wall. Everything fetched from an
+# external service goes through here so it behaves the same way.
+# ---------------------------------------------------------------------------
+
+def cache_feed(feed, payload, ttl_seconds=300):
+    """Store a successful fetch."""
+    with get_db() as conn:
+        conn.execute("""
+            INSERT INTO feed_cache (feed, payload, fetched_at, ttl_seconds,
+                                    ok, error, tried_at)
+            VALUES (?, ?, datetime('now'), ?, 1, '', datetime('now'))
+            ON CONFLICT(feed) DO UPDATE SET
+                payload = excluded.payload,
+                fetched_at = excluded.fetched_at,
+                ttl_seconds = excluded.ttl_seconds,
+                ok = 1, error = '', tried_at = excluded.tried_at
+        """, (feed, json.dumps(payload), int(ttl_seconds)))
+
+
+def mark_feed_error(feed, error, ttl_seconds=300):
+    """Record a failed fetch **without** discarding the last good payload.
+
+    This is the whole point of the table: the Pi's WLAN drops and these APIs
+    time out, and neither event should change what the wall shows.
+    """
+    with get_db() as conn:
+        conn.execute("""
+            INSERT INTO feed_cache (feed, payload, fetched_at, ttl_seconds,
+                                    ok, error, tried_at)
+            VALUES (?, '', datetime('now'), ?, 0, ?, datetime('now'))
+            ON CONFLICT(feed) DO UPDATE SET
+                ok = 0, error = excluded.error, tried_at = excluded.tried_at
+        """, (feed, int(ttl_seconds), str(error)[:500]))
+
+
+def get_feed(feed):
+    """The cached payload plus how old and how healthy it is, or None."""
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT * FROM feed_cache WHERE feed = ?", (feed,)).fetchone()
+    if not row or not row["payload"]:
+        return None
+    try:
+        payload = json.loads(row["payload"])
+    except ValueError:
+        return None
+    age = _age_seconds(row["fetched_at"])
+    return {
+        "feed": feed,
+        "payload": payload,
+        "age_seconds": age,
+        "ttl_seconds": row["ttl_seconds"],
+        # "Stale" is three times the TTL, not one: a feed one refresh behind is
+        # normal operation, and a marker that lights up every other minute
+        # stops meaning anything.
+        "stale": age is not None and age > row["ttl_seconds"] * 3,
+        "ok": bool(row["ok"]),
+        "error": row["error"] or None,
+    }
+
+
+def feed_is_fresh(feed):
+    """True when the cached copy is inside its TTL — i.e. no refetch needed."""
+    entry = get_feed(feed)
+    if entry is None or entry["age_seconds"] is None:
+        return False
+    return entry["age_seconds"] < entry["ttl_seconds"]
+
+
+def feed_freshness():
+    """Every feed's health, for /api/status and doctor."""
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT feed, fetched_at, ttl_seconds, ok, error FROM feed_cache "
+            "ORDER BY feed").fetchall()
+    out = []
+    for row in rows:
+        age = _age_seconds(row["fetched_at"])
+        out.append({
+            "feed": row["feed"],
+            "age_seconds": age,
+            "ttl_seconds": row["ttl_seconds"],
+            "stale": age is not None and age > row["ttl_seconds"] * 3,
+            "ok": bool(row["ok"]),
+            "error": row["error"] or None,
+        })
+    return out
+
+
+def get_feed_any_transit(settings):
+    """Whether a transit payload is cached at all, regardless of freshness.
+
+    Used to decide if a dark-screen render still has something to show.
+    """
+    provider = str(settings.get("transit_provider", "transitous"))
+    station = str(settings.get("transit_station_id", ""))
+    return get_feed(f"transit:{provider}:{station}") is not None
+
+
+def forget_feed(prefix):
+    """Drop cached feeds by prefix — used when a station or location changes."""
+    with get_db() as conn:
+        conn.execute("DELETE FROM feed_cache WHERE feed LIKE ?", (prefix + "%",))
+
+
+def _age_seconds(stamp):
+    if not stamp:
+        return None
+    try:
+        at = datetime.strptime(str(stamp), "%Y-%m-%d %H:%M:%S").replace(
+            tzinfo=timezone.utc)
+    except ValueError:
+        return None
+    return round((datetime.now(timezone.utc) - at).total_seconds(), 1)
 
 
 def get_last_poll_time():

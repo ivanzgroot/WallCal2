@@ -37,6 +37,7 @@
                 <div class="far-clock" id="farClock">--:--</div>
                 <div class="far-next" id="farNext"></div>
                 <div class="far-wx" id="farWeather" hidden></div>
+                <div class="travel" id="farTravel" hidden></div>
                 <div class="far-bin" id="farBin" hidden></div>
             </section>
 
@@ -56,10 +57,21 @@
                         <div class="cal-grid" id="calGrid"></div>
                     </div>
 
+                    <!-- Slots are reserved whether or not their widget is
+                         showing, so a bus becoming due never reshuffles the
+                         column around it. -->
                     <aside class="rail">
-                        <div class="rail-k">Als n&auml;chstes</div>
-                        <div id="railList"></div>
-                        <div class="rail-foot" id="railFoot"></div>
+                        <div class="slot slot-next">
+                            <div class="rail-k">Als n&auml;chstes</div>
+                            <div id="railList"></div>
+                            <div class="travel" id="travelHint" hidden></div>
+                        </div>
+                        <div class="slot slot-transit" id="transitBoard" hidden></div>
+                        <div class="slot slot-weather" id="nearWeather" hidden></div>
+                        <div class="rail-foot">
+                            <div class="near-bin" id="nearBin" hidden></div>
+                            <div class="qr" id="qrBox" hidden></div>
+                        </div>
                     </aside>
                 </div>
             </section>

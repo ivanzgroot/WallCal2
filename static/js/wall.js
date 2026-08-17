@@ -466,6 +466,298 @@ function renderRail(today) {
 }
 
 // ===============================================================
+// WIDGETS
+//
+// The server decides visibility and hands back final shapes, so nothing
+// here works out whether a widget belongs on screen — it only draws.
+//
+// Slots are reserved in the grid whether or not their widget is showing.
+// A dashboard that reshuffles itself every time a bus becomes due looks
+// broken rather than clever.
+// ===============================================================
+var widgetTimer = null;
+
+function fetchWidgets() {
+    apiGet('/api/widgets', function(err, data) {
+        if (err || !data) return;      // keep whatever is on screen
+        state.widgets = data;
+        renderWidgets();
+    });
+}
+
+function renderWidgets() {
+    var w = state.widgets || {};
+    renderWeather(w.weather);
+    renderTransit(w.transit);
+    renderTravel(w.travel);
+    renderAbfall();
+    renderQr(w.qr);
+    markFeedStaleness(w.feeds);
+}
+
+/** A feed quietly serving old data gets the same dot as a failed sync. */
+function markFeedStaleness(list) {
+    if (!list || !list.length) return;
+    for (var i = 0; i < list.length; i++) {
+        if (list[i].stale) { markStale(true); return; }
+    }
+}
+
+// --- Weather ---------------------------------------------------------
+function renderWeather(w) {
+    var far = $('farWeather'), near = $('nearWeather');
+    if (!w || !w.visible) { far.hidden = true; near.hidden = true; return; }
+
+    var temp = (w.temperature === null || w.temperature === undefined)
+        ? '' : w.temperature + (w.units || '°');
+    far.hidden = false;
+    far.innerHTML = '';
+    if (temp) far.appendChild(document.createTextNode(temp));
+    if (w.headline) {
+        var sub = document.createElement('span');
+        sub.className = 'sub';
+        sub.textContent = (temp ? ' · ' : '') + w.headline;
+        far.appendChild(sub);
+    }
+
+    // NEAR gets today's shape and tomorrow's number — still not a 7-day grid.
+    near.hidden = false;
+    near.innerHTML = '';
+    var head = document.createElement('div');
+    head.className = 'wx-head';
+    head.textContent = temp + (w.headline ? ' · ' + w.headline : '');
+    near.appendChild(head);
+
+    if (w.hourly && w.hourly.length) {
+        var row = document.createElement('div');
+        row.className = 'wx-hours';
+        for (var i = 0; i < w.hourly.length; i++) {
+            var h = w.hourly[i];
+            var cell = document.createElement('span');
+            cell.className = 'wx-h';
+            cell.innerHTML = '<b>' + (h.temp === null ? '–' : h.temp) + '</b>' + h.at;
+            if (h.rain !== null && h.rain >= 40) cell.className += ' wet';
+            row.appendChild(cell);
+        }
+        near.appendChild(row);
+    }
+    if (w.tomorrow) {
+        var tm = document.createElement('div');
+        tm.className = 'wx-tomorrow';
+        tm.textContent = 'Morgen ' + (w.tomorrow.min !== null ? w.tomorrow.min + '°' : '')
+            + ' bis ' + (w.tomorrow.max !== null ? w.tomorrow.max + '°' : '');
+        near.appendChild(tm);
+    }
+}
+
+// --- ÖPNV ------------------------------------------------------------
+function renderTransit(t) {
+    var host = $('transitBoard');
+    if (!t || !t.visible) { host.hidden = true; return; }
+    host.hidden = false;
+    host.innerHTML = '';
+
+    var head = document.createElement('div');
+    head.className = 'rail-k';
+    head.textContent = t.station || 'Abfahrten';
+    host.appendChild(head);
+
+    if (!t.departures.length) {
+        var empty = document.createElement('div');
+        empty.className = 'empty';
+        empty.textContent = 'Keine Abfahrten';
+        host.appendChild(empty);
+        return;
+    }
+
+    for (var i = 0; i < t.departures.length; i++) {
+        var d = t.departures[i];
+        var row = document.createElement('div');
+        row.className = 'dep' + (d.cancelled ? ' cancelled' : '');
+
+        var line = document.createElement('span');
+        line.className = 'line';
+        line.textContent = d.line;
+        row.appendChild(line);
+
+        var dir = document.createElement('span');
+        dir.className = 'dir';
+        dir.textContent = d.direction;
+        row.appendChild(dir);
+
+        var when = document.createElement('span');
+        when.className = 'when' + (d.minutes !== null && d.minutes <= 5 ? ' soon' : '');
+        when.textContent = d.when;
+        if (d.delay > 0) {
+            var late = document.createElement('span');
+            late.className = 'late';
+            late.textContent = ' +' + d.delay;
+            when.appendChild(late);
+        }
+        row.appendChild(when);
+        host.appendChild(row);
+    }
+}
+
+// --- Travel time -----------------------------------------------------
+function renderTravel(t) {
+    var host = $('travelHint');
+    if (!t || !t.visible) { host.hidden = true; return; }
+    host.hidden = false;
+    host.className = 'travel' + (t.late ? ' late' : '');
+    host.innerHTML = '';
+    var strong = document.createElement('b');
+    strong.textContent = 'Losfahren um ' + t.leave_at;
+    host.appendChild(strong);
+    var sub = document.createElement('span');
+    sub.textContent = ' · ' + t.minutes + ' min nach ' + (t.location || '');
+    host.appendChild(sub);
+}
+
+// --- Abfall ----------------------------------------------------------
+//
+// The banner window straddles midnight: from a time the day before
+// collection until a time on the day itself.
+function abfallState(now) {
+    var data = state.abfall;
+    if (!data || !data.days || !data.days.length) return null;
+
+    var from = hhmmToMinutes(data.from_hour, 16 * 60);
+    var until = hhmmToMinutes(data.until_hour, 10 * 60);
+    var nowMin = now.getHours() * 60 + now.getMinutes();
+
+    for (var i = 0; i < data.days.length; i++) {
+        var day = data.days[i];
+        var d = new Date(day.date + 'T00:00:00');
+        if (isNaN(d.getTime())) continue;
+        var diffDays = Math.round((startOfDay(d) - startOfDay(now)) / 86400000);
+
+        if (diffDays === 1 && nowMin >= from) return { day: day, when: 'morgen' };
+        if (diffDays === 0 && nowMin < until) return { day: day, when: 'heute' };
+        if (diffDays >= 0) return { day: day, when: null, upcoming: true };
+    }
+    return null;
+}
+
+function renderAbfall() {
+    var vis = (state.settings.widget_abfall || 'dynamic');
+    var hosts = [$('farBin'), $('nearBin')];
+    var i;
+    if (vis === 'off') {
+        for (i = 0; i < hosts.length; i++) hosts[i].hidden = true;
+        return;
+    }
+
+    var st = abfallState(new Date());
+    // dynamic shows only inside the banner window; always shows the next
+    // collection date whenever there is one.
+    var show = st && (st.when !== null || vis === 'always');
+    for (i = 0; i < hosts.length; i++) {
+        var host = hosts[i];
+        if (!show) { host.hidden = true; continue; }
+        host.hidden = false;
+        host.innerHTML = '';
+        // Several fractions on one day render together rather than the last
+        // one overwriting the rest.
+        for (var f = 0; f < st.day.fractions.length; f++) {
+            var fr = st.day.fractions[f];
+            var swatch = document.createElement('i');
+            swatch.style.background = fr.color;
+            host.appendChild(swatch);
+            var label = document.createElement('span');
+            label.textContent = st.when ? fr.label + ' raus' : fr.label;
+            host.appendChild(label);
+        }
+        if (!st.when) {
+            var date = document.createElement('span');
+            date.className = 'sub';
+            date.textContent = ' ' + fdate(fmt.weekdaySm, new Date(st.day.date + 'T00:00:00'));
+            host.appendChild(date);
+        }
+    }
+}
+
+// --- QR companion ----------------------------------------------------
+function renderQr(q) {
+    var host = $('qrBox');
+    if (!q || !q.visible) { host.hidden = true; return; }
+    // dynamic means NEAR only: a QR code is useless from across the room.
+    var density = $('app').getAttribute('data-density');
+    if (q.mode === 'dynamic' && density !== 'near') { host.hidden = true; return; }
+    host.hidden = false;
+    var size = q.size || 96;
+    if (host.getAttribute('data-size') !== String(size)) {
+        host.setAttribute('data-size', String(size));
+        host.style.width = size + 'px';
+        host.style.height = size + 'px';
+        host.innerHTML = '';
+        var img = document.createElement('img');
+        img.src = '/api/qr.svg?size=' + size;
+        img.alt = 'Einstellungen';
+        img.width = size; img.height = size;
+        host.appendChild(img);
+    }
+}
+
+// ===============================================================
+// SCREENSAVER
+// ===============================================================
+function applyScreensaver(s) {
+    var app = $('app');
+    var saver = (s && s.screensaver) || {};
+    app.setAttribute('data-saver', saver.active ? (saver.style || 'dim_dashboard') : '');
+    // Drift is forced on while the screensaver is up, whatever the setting:
+    // this is the state that runs for hours with nobody watching.
+    if (saver.active) app.setAttribute('data-drift', 'on');
+}
+
+// ===============================================================
+// TIME-OF-DAY LAYOUT
+// ===============================================================
+function applyTimeOfDay(now) {
+    var app = $('app');
+    if (state.settings.timeofday_enabled !== 'true') {
+        app.setAttribute('data-slot', '');
+        app.removeAttribute('data-tod');
+        return;
+    }
+    var mins = now.getHours() * 60 + now.getMinutes();
+    var morningUntil = hhmmToMinutes(state.settings.timeofday_morning_until, 11 * 60);
+    var eveningFrom = hhmmToMinutes(state.settings.timeofday_evening_from, 17 * 60);
+    var slot = mins < morningUntil ? 'morning'
+             : (mins >= eveningFrom ? 'evening' : 'midday');
+    if (app.getAttribute('data-tod') === slot) return;
+    app.setAttribute('data-tod', slot);
+
+    var wanted = String(state.settings['timeofday_' + slot] || '').split(',');
+    var map = {
+        transit: 'transitBoard', weather: 'nearWeather',
+        weather_tomorrow: 'nearWeather', abfall: 'nearBin',
+        agenda_today: 'calGrid', agenda_tomorrow: 'calGrid'
+    };
+    // Reuse the density crossfade rather than inventing a second transition.
+    for (var key in map) {
+        var el = $(map[key]);
+        if (!el) continue;
+        el.classList.toggle('tod-hidden', wanted.indexOf(key) < 0);
+    }
+}
+
+// ===============================================================
+// Small helpers
+// ===============================================================
+function hhmmToMinutes(text, dflt) {
+    var parts = String(text || '').split(':');
+    var h = parseInt(parts[0], 10), m = parseInt(parts[1] || '0', 10);
+    if (isNaN(h) || isNaN(m)) return dflt;
+    return h * 60 + m;
+}
+
+function startOfDay(d) {
+    return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+}
+
+// ===============================================================
 // DENSITY
 //
 // Hysteresis is mandatory: without separate enter/exit thresholds the
@@ -547,6 +839,8 @@ function renderWall() {
     buildEventIndex();
     renderFar();
     renderNear();
+    renderWidgets();
+    applyTimeOfDay(new Date());
 }
 
 function updateClock() {
@@ -587,6 +881,7 @@ function fetchEvents() {
         state.lastPoll = data.last_poll;
         try { localStorage.setItem('wallcal_events', JSON.stringify(data)); } catch (e) {}
         markStale(false);
+        state.abfall = data.abfall || null;
         renderWall();
     });
 }
@@ -941,6 +1236,7 @@ function watchForWake() {
             }
             if (on === true || on === false) lastDisplayOn = on;
             applyPanelState(data);
+            applyScreensaver(data);
         }
         updateDensity(data.distance_cm);
     });
@@ -1174,6 +1470,11 @@ function init() {
     pollTimer = setInterval(function() {
         fetchEvents();
     }, 5 * 60 * 1000); // default 5 min, actual controlled by countdown
+
+    // Widgets have their own cadence: the server only refetches when a TTL
+    // has lapsed, and it skips the network entirely while the panel is dark.
+    fetchWidgets();
+    widgetTimer = setInterval(fetchWidgets, 30000);
 
     // Re-render on the minute so the fortnight rolls over at midnight without
     // waiting for the next CalDAV poll.

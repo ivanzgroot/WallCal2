@@ -124,6 +124,13 @@ DEFAULT_COMMAND = {
     "pause_until": 0.0,   # epoch seconds; daemon releases the sensor until then
     "reload_seq": 0,      # bump to make the daemon re-read settings now
     "rescan_seq": 0,      # bump to make the daemon re-detect sensor + display
+    # Anticipatory wake: the web app owns the calendar, so it computes the
+    # next wake window and publishes it here rather than giving the daemon a
+    # database dependency. Separate from wake_until because a manual override
+    # must not silently cancel a calendar wake, or vice versa.
+    "wake_plan_from": 0.0,   # epoch seconds; panel comes up at this time
+    "wake_plan_until": 0.0,  # ...and is held until this one
+    "wake_plan_label": "",
     "seq": 0,
 }
 
@@ -153,6 +160,27 @@ def set_override(mode: str) -> dict:
 def wake_for(seconds: float) -> dict:
     """Keep the display on for at least ``seconds`` from now."""
     return push_command(wake_until=time.time() + max(1.0, float(seconds)))
+
+
+def set_wake_plan(start_epoch: float, until_epoch: float, label: str = "") -> dict:
+    """Publish the next calendar-driven wake window."""
+    return push_command(wake_plan_from=float(start_epoch or 0),
+                        wake_plan_until=float(until_epoch or 0),
+                        wake_plan_label=str(label or "")[:120])
+
+
+def clear_wake_plan() -> dict:
+    return set_wake_plan(0, 0, "")
+
+
+def wake_plan_active(command=None) -> bool:
+    command = command if command is not None else read_command()
+    try:
+        now = time.time()
+        return (float(command.get("wake_plan_from", 0) or 0) <= now
+                < float(command.get("wake_plan_until", 0) or 0))
+    except (TypeError, ValueError):
+        return False
 
 
 def request_reload() -> dict:

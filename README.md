@@ -32,8 +32,17 @@ The installer walks through ten steps and prompts before anything
 irreversible. When it finishes, reboot; the Pi comes back logged in, running
 the calendar full-screen, with the presence daemon controlling the panel.
 
-Then open `http://<pi-address>:5005/` from any machine on the network (or
-`http://<hostname>.local:5005/`) and add your calendar under **⚙ → Calendars**.
+Then open `http://<pi-address>:5005/settings` from any machine on the network
+(or `http://<hostname>.local:5005/settings`) and add your calendar.
+
+The wall display also shows a small QR code pointing at that page, so the usual
+way in is to scan it off the wall with a phone.
+
+> **Security note.** That QR code puts an unauthenticated settings URL on a
+> wall. WallCal has no authentication by design — it is a LAN-only appliance,
+> and the posture is the same one the rest of the project documents. Do not
+> expose port 5005 to the internet. Turn the QR widget off under
+> **Widgets → QR-Code** if the wall is somewhere public.
 
 > **Editing on Windows?** Shell scripts need Unix line endings or the Pi
 > reports `bad interpreter: /bin/bash^M`. The installer normalises them
@@ -416,8 +425,11 @@ command to fix each failure.
 wallcal.sh              Entry point: install, services, kiosk, sensor, display
 app.py                  Flask app and REST API
 caldav_poller.py        Background CalDAV sync
-database.py             SQLite persistence (settings, calendars, event cache)
+database.py             SQLite persistence, migrations, feed cache
 config.py               Defaults, all overridable via WALLCAL_* env vars
+feeds.py                Transit, weather and travel-time providers
+widgets.py              Widget visibility rules and display shaping
+prewake.py              Anticipatory wake: publishes the next wake window
 presence/
   ld2410.py             HLK-LD2410C UART protocol driver
   display.py            Display power backends with autodetection
@@ -427,9 +439,118 @@ presence/
   runtime.py            IPC between the daemon and the web app
   cli.py                Sensor/display/presence tooling
 scripts/kiosk.sh        Session-agnostic kiosk launcher with supervision
-templates/calendar.html The calendar UI
+templates/
+  calendar.html         The wall display
+  settings.html         The settings page (mobile-first)
+static/
+  css/tokens.css        Palette and type scale
+  css/wall.css          The wall display
+  css/settings-page.css The settings page
+  js/wall.js            Wall rendering, density, widgets
+  js/settings.js        Settings behaviour
 ```
 
 The web app never touches the display directly — it publishes intent through a
 small JSON file in `/run/wallcal`, and the daemon acts on it. That way the two
 processes can never fight over the panel.
+
+
+---
+
+## Widgets
+
+Every widget has one visibility setting — **always**, **dynamic** or **off** —
+and its own rule for what "dynamic" means. Slots keep their place in the grid
+whether or not the widget is showing, so nothing reshuffles when a bus becomes
+due.
+
+| Widget | `dynamic` means |
+|---|---|
+| **Abfall** | From a configurable time the day before collection until one on the day itself |
+| **ÖPNV** | Only inside the configured per-weekday windows |
+| **Wetter** | Only when there is something actionable — rain starting, frost, wind |
+| **Fahrzeit** | Only within a configurable window before an event that has an address |
+| **QR-Code** | Only in the near layout; it is useless from across the room |
+
+**Abfall** is one of your existing CalDAV sources, not a new poller. Mark it
+under **Kalender → Abfallkalender** and it drops out of the normal agenda.
+Title substrings map to a fraction name and colour, editable in settings,
+because every Kommune names them differently. Several fractions on one day
+render together.
+
+**ÖPNV** uses [Transitous](https://transitous.org/), a community MOTIS instance
+covering all German operators through DELFI and the regional feeds. No API key.
+It was chosen over `v6.db.transport.rest` because that wraps Deutsche Bahn
+alone, its HAFAS backend was shut off permanently, and its data endpoints were
+returning 503 during development — a `db-rest` provider is still included
+behind the same interface and selectable with `transit_provider`.
+
+**Wetter** uses Open-Meteo, no key. It shows one actionable line, not a
+seven-day grid — those are not read on a wall.
+
+**Fahrzeit** reuses the same MOTIS instance for routing, so it needs no second
+service. It is transit time; there is no car routing. Events without a
+parseable address are skipped silently.
+
+### Failure behaviour
+
+Every feed caches to SQLite on fetch and the page always renders from that
+cache. There is no spinner and no error state: a failed refresh keeps the last
+good data and marks it with a small dot. The Pi's WLAN will drop and these APIs
+will time out, and neither should be visible on the wall.
+
+```bash
+./wallcal.sh doctor        # includes per-feed freshness
+curl -s localhost:5005/api/status | python3 -m json.tool
+```
+
+---
+
+## Settings
+
+Six sections, one scrolling page with a sticky jumper: **Kalender**,
+**Widgets**, **Anzeige**, **Präsenz**, **System**, **Erweitert**. Changes apply
+live within a couple of seconds — there is no save button.
+
+**Erweitert** holds anything hardware-specific or footgun-adjacent: the
+off-strategy, display backend pinning, PWM pins and parameters, sensor mode and
+port, and the radar factory reset. A user who never opens it gets sensible
+autodetected behaviour.
+
+Everything is also reachable from the command line:
+
+```bash
+./wallcal.sh config list
+./wallcal.sh config set near_view=month
+./wallcal.sh config set widget_transit=always
+```
+
+| Setting group | Keys |
+|---|---|
+| Density | `density_mode` `density_near_cm` `density_far_cm` `density_min_band_cm` `density_debounce_ms` `crossfade_ms` |
+| Layout | `near_view` `drift_enabled` `timezone` `locale` `timeofday_*` |
+| Brightness | `brightness` `dim_seconds` `dim_level` `night_mode` `night_brightness` |
+| Screensaver | `screensaver_style` `screensaver_idle_seconds` `screensaver_brightness` |
+| Anticipatory wake | `prewake_enabled` `prewake_lead_minutes` `prewake_timed_only` `prewake_allday_at` `prewake_hold_minutes` |
+| Widgets | `widget_*` `abfall_*` `transit_*` `weather_*` `home_*` `travel_*` `qr_size` |
+| Backlight | `display_off_strategy` `pwm_*` |
+
+---
+
+## API
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /` | The wall display |
+| `GET /settings` | The settings page |
+| `GET /events` | Cached events, plus the Abfall payload |
+| `GET /api/widgets` | Transit, weather, travel and QR, already decided |
+| `GET /api/presence/live` | ~140 bytes of live presence, polled at 500 ms |
+| `GET /api/presence` | Full sensor telemetry |
+| `GET /api/display` | Power, brightness, off-strategy |
+| `GET /api/prewake` | The next calendar-driven wake |
+| `GET /api/status` | Health, poller state, per-feed freshness |
+| `GET /api/qr.svg` | The companion QR code |
+| `GET /api/transit/search?q=` | Station search |
+| `GET /api/geocode?q=` | Place search for the location pickers |
+| `GET/POST /api/settings` | Read and write settings |

@@ -18,6 +18,9 @@ from flask import (Flask, jsonify, request, send_from_directory, render_template
 
 import config
 import database
+import feeds
+import widgets
+import prewake
 from caldav_poller import CalDAVPoller
 from presence import runtime as presence_runtime
 
@@ -40,6 +43,7 @@ app = Flask(__name__, template_folder="templates", static_folder="static")
 app.secret_key = config.SECRET_KEY
 
 poller = CalDAVPoller()
+prewake_scheduler = prewake.PrewakeScheduler()
 
 
 # ---------------------------------------------------------------------------
@@ -71,6 +75,17 @@ def index():
     return render_template("calendar.html")
 
 
+@app.route("/settings")
+def settings_page():
+    """The service surface, on its own URL.
+
+    Separate from the wall display because the two have different jobs and
+    different viewports: the wall is pinned to 1920 and has no pointer, this
+    is opened on a phone by scanning the QR code off it.
+    """
+    return render_template("settings.html")
+
+
 # ---------------------------------------------------------------------------
 # Events API
 # ---------------------------------------------------------------------------
@@ -81,13 +96,103 @@ def get_events():
     days = request.args.get("days", 30, type=int)
     days = min(days, 90)  # cap at 90
 
-    events = database.get_cached_events(days=days)
+    settings = database.get_all_settings()
+    abfall_id = (settings.get("abfall_calendar_id") or "").strip()
+
+    # The Abfall source is a CalDAV calendar like any other, but its entries
+    # belong to their own widget rather than the day's agenda.
+    events = database.get_cached_events(
+        days=days, exclude_calendar_ids=[abfall_id] if abfall_id else None)
     return jsonify({
         "events": events,
         "count": len(events),
+        "abfall": _abfall_payload(settings),
         "last_poll": database.get_last_poll_time(),
         "generated_at": datetime.now(timezone.utc).isoformat(),
     })
+
+
+def _abfall_payload(settings):
+    """Upcoming bin collections, already mapped to fraction and colour.
+
+    Multiple fractions on one day are kept as a list rather than collapsed,
+    so the wall renders them together instead of one overwriting the other.
+    """
+    cal_id = (settings.get("abfall_calendar_id") or "").strip()
+    if not cal_id.isdigit():
+        return None
+    rows = database.get_cached_events(days=30)
+    fractions = widgets.parse_fractions(settings.get("abfall_fractions", ""))
+
+    by_day = {}
+    for ev in rows:
+        if str(ev.get("calendar_id")) != cal_id:
+            continue
+        day = str(ev.get("dtstart", ""))[:10]
+        if not day:
+            continue
+        match = widgets.match_fraction(ev.get("summary", ""), fractions)
+        by_day.setdefault(day, []).append({
+            "label": match["label"],
+            "color": match["color"],
+            "summary": ev.get("summary", ""),
+        })
+    return {"days": [{"date": d, "fractions": by_day[d]}
+                     for d in sorted(by_day)][:8],
+            "from_hour": settings.get("abfall_from_hour", "16:00"),
+            "until_hour": settings.get("abfall_until_hour", "10:00")}
+
+
+# ---------------------------------------------------------------------------
+# Widget feeds
+#
+# One endpoint, because the wall display needs them together and three
+# requests every minute from a Pi 3B+ is three times the wakeups. Everything
+# here reads the cache; a fetch only ever happens when a TTL has expired.
+# ---------------------------------------------------------------------------
+
+@app.route("/api/widgets")
+def get_widgets():
+    settings = database.get_all_settings()
+    awake = presence_runtime.read_state().get("display_on")
+
+    # Never poll a dark screen. The daemon publishes the panel state, so a
+    # sleeping wall stops costing anyone's rate limit.
+    allow_fetch = awake is not False
+    return jsonify(widgets.collect(settings, allow_fetch=allow_fetch))
+
+
+@app.route("/api/transit/search")
+def transit_search():
+    query = (request.args.get("q") or "").strip()
+    if len(query) < 2:
+        return jsonify({"stations": []})
+    try:
+        provider = feeds.transit_provider(request.args.get("provider"))
+        return jsonify({"stations": provider.search(query),
+                        "provider": provider.name})
+    except Exception as e:
+        logger.info("Station search failed: %s", e)
+        return jsonify({
+            "stations": [],
+            "error": "Die Haltestellensuche ist gerade nicht erreichbar. "
+                     "Prüfe die Netzwerkverbindung und versuche es erneut.",
+        }), 200
+
+
+@app.route("/api/geocode")
+def geocode_place():
+    """Resolve a place name to coordinates — used by the weather and home
+    location pickers, so nobody has to type latitude by hand."""
+    query = (request.args.get("q") or "").strip()
+    if len(query) < 2:
+        return jsonify({"places": []})
+    try:
+        return jsonify({"places": feeds.geocode_search(query)})
+    except Exception as e:
+        logger.info("Geocode failed: %s", e)
+        return jsonify({"places": [],
+                        "error": "Die Ortssuche ist gerade nicht erreichbar."}), 200
 
 
 # ---------------------------------------------------------------------------
@@ -117,6 +222,17 @@ def update_settings():
 
     database.set_many_settings(filtered)
     logger.info("Settings updated: %s", list(filtered.keys()))
+
+    # A changed station or location invalidates its cache; leaving it would
+    # keep the old departures on the wall until the TTL happened to lapse.
+    if {"transit_station_id", "transit_provider"} & set(filtered):
+        database.forget_feed("transit:")
+    if {"weather_lat", "weather_lon", "weather_units"} & set(filtered):
+        database.forget_feed("weather")
+    if {"home_lat", "home_lon"} & set(filtered):
+        database.forget_feed("travel:")
+    if any(k.startswith("prewake_") for k in filtered):
+        prewake_scheduler.poke()
 
     # Nudge the presence daemon so sensor/display changes apply immediately
     # instead of waiting for its next scheduled reload.
@@ -276,6 +392,83 @@ def get_presence():
     return jsonify(state)
 
 
+@app.route("/api/kiosk/restart", methods=["POST"])
+def restart_kiosk():
+    """Restart the kiosk browser on the wall."""
+    script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "wallcal.sh")
+    try:
+        subprocess.Popen([script, "kiosk", "restart"],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return jsonify({"ok": True})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/sensor/reset", methods=["POST"])
+def reset_sensor():
+    """Factory-reset the radar. Destructive: the UI confirms first."""
+    try:
+        from presence import calibration, ld2410
+        with calibration.sensor_access():
+            port, baud = calibration.resolve_target()
+            with ld2410.LD2410(port, baud, timeout=0.5) as radar:
+                radar.factory_reset()
+        presence_runtime.request_rescan()
+        return jsonify({"ok": True})
+    except Exception as e:
+        logger.error("Radar reset failed: %s", e)
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/qr.svg")
+def qr_svg():
+    """The companion QR code, as SVG so it scales without artefacts.
+
+    Encodes the settings URL. Note this puts an unauthenticated settings link
+    on a wall — see the security note in the README. It is LAN-only, and the
+    same posture the rest of the project already documents.
+    """
+    import io
+    import segno
+
+    target = request.args.get("url") or _settings_url()
+    try:
+        size = max(48, min(int(request.args.get("size", 96)), 512))
+    except (TypeError, ValueError):
+        size = 96
+
+    code = segno.make(target, error="m")
+    buf = io.BytesIO()
+    # light=None leaves the background transparent, so the code sits on the
+    # wall's own ground rather than in a white box.
+    code.save(buf, kind="svg", scale=max(1, size // (code.symbol_size()[0] or 1)),
+              dark="#7E8598", light=None, xmldecl=False, svgns=True)
+    return buf.getvalue(), 200, {
+        "Content-Type": "image/svg+xml",
+        "Cache-Control": "public, max-age=3600",
+    }
+
+
+def _settings_url():
+    host = request.host.split(":")[0]
+    return f"http://{host}:{config.PORT}/settings"
+
+
+@app.route("/api/prewake")
+def get_prewake():
+    """What the next calendar-driven wake is, and when."""
+    plan = prewake.next_wake()
+    if plan is None:
+        return jsonify({"enabled": database.get_setting("prewake_enabled") == "true",
+                        "next": None})
+    start, end, label = plan
+    return jsonify({"enabled": True, "next": {
+        "from": start.isoformat(timespec="minutes"),
+        "until": end.isoformat(timespec="minutes"),
+        "label": label,
+    }})
+
+
 @app.route("/api/presence/live")
 def get_presence_live():
     """Just the fields the wall display polls twice a second.
@@ -294,6 +487,7 @@ def get_presence_live():
         "present": state.get("present"),
         "display_on": state.get("display_on"),
         "display_mode": state.get("display_mode", "normal"),
+        "screensaver": state.get("screensaver") or {},
         "brightness": state.get("brightness", 100),
         "brightness_source": state.get("brightness_source", "css"),
         # None in gpio and none sensor modes, which have no distance at all —
@@ -565,6 +759,9 @@ def get_status():
             "present": presence.get("present"),
             "display_on": presence.get("display_on"),
         },
+        # Per-feed freshness, so a widget quietly serving week-old data is
+        # visible to status and doctor even though the wall never says so.
+        "feeds": database.feed_freshness(),
     })
 
 
@@ -575,6 +772,7 @@ def get_status():
 def shutdown_handler(signum, frame):
     logger.info("Received signal %d — shutting down", signum)
     poller.stop()
+    prewake_scheduler.stop()
     sys.exit(0)
 
 
@@ -588,6 +786,9 @@ def main():
 
     # Start CalDAV poller
     poller.start()
+
+    # Publish the anticipatory wake window for the daemon to act on.
+    prewake_scheduler.start()
 
     # Start Flask
     logger.info("WallCal starting on %s:%d", config.HOST, config.PORT)

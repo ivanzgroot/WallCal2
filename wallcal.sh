@@ -1486,6 +1486,7 @@ cmd_display() {
       pcli presence rescan
       ;;
     strategy)  pcli display strategy "$@" ;;
+    brightness) pcli settings set "brightness=${1:?usage: display brightness <0-100>}" ;;
     pwm)
       local sub="${1:-status}"; shift || true
       case "$sub" in
@@ -1691,6 +1692,36 @@ for severity, a, b in database.pin_conflicts():
         "if you use both, move one: ./wallcal.sh config set sensor_gpio_pin=23"
     fi
   done <<<"$conflicts"
+}
+
+# Per-feed freshness. Silent when no external feed is configured — most
+# installs are calendar-only and should not be told about a weather API they
+# never asked for.
+doctor_feeds() {
+  local rows
+  rows="$(py_user -c "
+import database
+for f in database.feed_freshness():
+    age = '-' if f['age_seconds'] is None else str(int(f['age_seconds']))
+    print('%s	%s	%s	%s' % (f['feed'], age, '1' if f['ok'] else '0',
+                                 '1' if f['stale'] else '0'))
+" 2>/dev/null || true)"
+  [[ -n "$rows" ]] || return 0
+
+  title "Data feeds"
+  local feed age ok stale
+  while IFS=$'	' read -r feed age ok stale; do
+    [[ -n "$feed" ]] || continue
+    local human="${age}s"
+    (( age > 90 )) 2>/dev/null && human="$(( age / 60 ))m"
+    if [[ "$ok" != "1" ]]; then
+      chk warn "$feed: last refresh failed (cached copy is ${human} old)"         "the wall keeps showing the last good data — this is by design"         "check the Pi's network, then: ./wallcal.sh logs -n 50"
+    elif [[ "$stale" == "1" ]]; then
+      chk warn "$feed: ${human} old, past its refresh window"         "" "usually a network problem rather than a WallCal one"
+    else
+      chk ok "$feed: fresh (${human})"
+    fi
+  done <<<"$rows"
 }
 
 cmd_doctor() {
@@ -1903,6 +1934,8 @@ else:
   else
     chk warn "kiosk not running" "" "./wallcal.sh kiosk start"
   fi
+  doctor_feeds
+
   if have chromium-browser || have chromium; then
     chk ok "chromium installed"
   else
@@ -2049,7 +2082,7 @@ _wallcal() {
             watchdog maintain info url open version help completion"
   case "$prev" in
     kiosk)    COMPREPLY=($(compgen -W "start stop restart status logs gpu diagnose" -- "$cur")); return ;;
-    display)  COMPREPLY=($(compgen -W "detect autoselect status on off toggle test rotate backend output strategy pwm" -- "$cur")); return ;;
+    display)  COMPREPLY=($(compgen -W "detect autoselect status on off toggle test rotate backend output strategy pwm brightness" -- "$cur")); return ;;
     sensor)   COMPREPLY=($(compgen -W "status scan monitor params gates sensitivity calibrate reset" -- "$cur")); return ;;
     presence) COMPREPLY=($(compgen -W "status on off auto wake rescan distance timeout" -- "$cur")); return ;;
     config)   COMPREPLY=($(compgen -W "list get set edit" -- "$cur")); return ;;

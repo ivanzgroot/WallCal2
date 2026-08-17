@@ -123,3 +123,73 @@ DEFAULT_CROSSFADE_MS = 400
 # IPS laptop panels retain a static clock position over months. Cheap
 # insurance whenever the panel is lit, so it defaults on in every mode.
 DEFAULT_DRIFT_ENABLED = True
+
+# --- Widgets -----------------------------------------------------------
+# Every widget takes the same three-way visibility: always | dynamic | off.
+# "dynamic" means "rendered only when it has something to say", per widget.
+DEFAULT_WIDGET_VISIBILITY = "dynamic"
+
+# Abfall — one of the CalDAV sources, not a new poller.
+DEFAULT_ABFALL_CALENDAR_ID = ""       # empty = no calendar marked as Abfall
+DEFAULT_ABFALL_FROM_HOUR = "16:00"    # banner appears the day before, from
+DEFAULT_ABFALL_UNTIL_HOUR = "10:00"   # ...and goes on collection day, until
+# Title substring -> label + colour. Every Kommune names these differently.
+DEFAULT_ABFALL_FRACTIONS = (
+    "rest=Restmüll:#8A8F9C|bio=Bio:#6FAE3F|papier=Papier:#4A90D9|"
+    "gelb=Gelber Sack:#E8C13F|wertstoff=Wertstoff:#E8823F"
+)
+
+# ÖPNV
+DEFAULT_TRANSIT_PROVIDER = "transitous"
+DEFAULT_TRANSIT_STATION_ID = ""
+DEFAULT_TRANSIT_STATION_NAME = ""
+DEFAULT_TRANSIT_COUNT = 3
+DEFAULT_TRANSIT_REFRESH_SECONDS = 60
+DEFAULT_TRANSIT_RELATIVE_BELOW_MIN = 20   # "in 4 min" under this, clock above
+DEFAULT_TRANSIT_FILTER_LINES = ""
+DEFAULT_TRANSIT_FILTER_DIRECTIONS = ""
+# Per-weekday windows; empty means "not shown that day". mon..sun.
+DEFAULT_TRANSIT_WINDOWS = (
+    "mon=06:30-09:00,16:00-18:30|tue=06:30-09:00,16:00-18:30|"
+    "wed=06:30-09:00,16:00-18:30|thu=06:30-09:00,16:00-18:30|"
+    "fri=06:30-09:00,16:00-18:30|sat=|sun="
+)
+
+# Weather — Open-Meteo, no key required
+DEFAULT_WEATHER_LAT = ""
+DEFAULT_WEATHER_LON = ""
+DEFAULT_WEATHER_PLACE = ""
+DEFAULT_WEATHER_UNITS = "metric"      # metric | imperial
+DEFAULT_WEATHER_REFRESH_SECONDS = 900
+
+# Travel time
+DEFAULT_HOME_LAT = ""
+DEFAULT_HOME_LON = ""
+DEFAULT_TRAVEL_WINDOW_MINUTES = 90    # only visible this long before an event
+DEFAULT_TRAVEL_BUFFER_MINUTES = 5     # arrive this early
+DEFAULT_TRAVEL_REFRESH_SECONDS = 1800
+
+# QR companion code
+DEFAULT_QR_SIZE = 96                  # px on a 1920-wide panel
+
+# --- Screensaver (off-strategy "none") ---------------------------------
+DEFAULT_SCREENSAVER_STYLE = "dim_dashboard"   # dim_dashboard | clock | blank
+DEFAULT_SCREENSAVER_IDLE_SECONDS = 120
+DEFAULT_SCREENSAVER_BRIGHTNESS = 12
+
+# --- Anticipatory wake -------------------------------------------------
+# Ships off: waking a wall display for a calendar entry is opinionated.
+DEFAULT_PREWAKE_ENABLED = False
+DEFAULT_PREWAKE_LEAD_MINUTES = 35
+DEFAULT_PREWAKE_CALENDARS = ""        # empty = all
+DEFAULT_PREWAKE_TIMED_ONLY = True
+DEFAULT_PREWAKE_ALLDAY_AT = "07:00"   # used when timed_only is off
+DEFAULT_PREWAKE_HOLD_MINUTES = 5      # hold until start + this
+
+# --- Time-of-day layout ------------------------------------------------
+DEFAULT_TIMEOFDAY_ENABLED = False
+DEFAULT_TIMEOFDAY_MORNING_UNTIL = "11:00"
+DEFAULT_TIMEOFDAY_EVENING_FROM = "17:00"
+DEFAULT_TIMEOFDAY_MORNING = "agenda_today,transit,weather"
+DEFAULT_TIMEOFDAY_MIDDAY = "agenda_today,weather"
+DEFAULT_TIMEOFDAY_EVENING = "agenda_tomorrow,abfall,weather_tomorrow"

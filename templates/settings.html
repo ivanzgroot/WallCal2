@@ -1,0 +1,665 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <!-- Reached by scanning a QR code off a wall, so this one is a real
+         responsive viewport, unlike the 1920-wide wall display. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="color-scheme" content="dark light">
+    <title>WallCal — Einstellungen</title>
+    <link rel="stylesheet" href="{{ static_url('css/tokens.css') }}">
+    <link rel="stylesheet" href="{{ static_url('css/settings-page.css') }}">
+</head>
+<body class="settings" data-theme="dark">
+<div class="wrap">
+
+    <header class="masthead">
+        <h1>Einstellungen</h1>
+        <p id="hostLine">WallCal</p>
+    </header>
+
+    <nav class="jumper" id="jumper" aria-label="Abschnitte">
+        <a href="#calendars">Kalender</a>
+        <a href="#widgets">Widgets</a>
+        <a href="#display">Anzeige</a>
+        <a href="#presence">Präsenz</a>
+        <a href="#system">System</a>
+        <a href="#advanced">Erweitert</a>
+    </nav>
+
+    <!-- ============================================================ -->
+    <section id="calendars">
+        <h2>Kalender</h2>
+        <p class="lede">CalDAV-Quellen, Farben und der Abfallkalender.</p>
+
+        <div class="group" id="calList">
+            <div class="empty-state">
+                <b>Noch keine Kalender</b>
+                Füge eine CalDAV-Quelle hinzu, damit auf der Wand etwas steht.
+            </div>
+        </div>
+
+        <div class="group">
+            <div class="row">
+                <div class="row-head"><span class="name">Quelle hinzufügen</span></div>
+                <p class="desc">Nextcloud, iCloud oder ein anderer CalDAV-Server.</p>
+                <div class="control">
+                    <input type="text" id="calUrl" placeholder="https://cloud.example.de/remote.php/dav">
+                    <input type="text" id="calUser" placeholder="Benutzername" style="margin-top:8px">
+                    <input type="password" id="calPass" placeholder="Passwort" style="margin-top:8px">
+                    <div class="seg" style="margin-top:10px">
+                        <button class="btn ghost" id="calTest">Verbindung testen</button>
+                        <button class="btn" id="calDiscover">Kalender suchen</button>
+                    </div>
+                    <div id="calFeedback"></div>
+                    <div class="results" id="calResults"></div>
+                </div>
+            </div>
+        </div>
+
+        <div class="group">
+            <h3>Abfallkalender</h3>
+            <div class="row">
+                <div class="row-head">
+                    <label for="setAbfallCal">Abfallkalender</label>
+                    <span class="value" data-value-for="abfall_calendar_id">—</span>
+                </div>
+                <p class="desc">Dieser Kalender erscheint nicht im Terminplan, sondern als eigenes Banner.</p>
+                <div class="control"><select id="setAbfallCal" data-setting="abfall_calendar_id"></select></div>
+            </div>
+            <div class="row">
+                <div class="row-head">
+                    <label for="setAbfallFractions">Fraktionen</label>
+                </div>
+                <p class="desc">Titel-Textbaustein = Anzeigename:Farbe, getrennt mit |. Jede Kommune benennt sie anders.</p>
+                <div class="control">
+                    <textarea id="setAbfallFractions" data-setting="abfall_fractions" spellcheck="false"></textarea>
+                </div>
+            </div>
+            <div class="row">
+                <div class="row-head">
+                    <label for="setAbfallFrom">Banner ab (Vortag)</label>
+                    <span class="value" data-value-for="abfall_from_hour">—</span>
+                </div>
+                <p class="desc">Ab dieser Uhrzeit am Tag davor wird an die Tonne erinnert.</p>
+                <div class="control"><input type="time" id="setAbfallFrom" data-setting="abfall_from_hour"></div>
+            </div>
+            <div class="row">
+                <div class="row-head">
+                    <label for="setAbfallUntil">Banner bis (Abholtag)</label>
+                    <span class="value" data-value-for="abfall_until_hour">—</span>
+                </div>
+                <p class="desc">Am Abholtag bis zu dieser Uhrzeit sichtbar.</p>
+                <div class="control"><input type="time" id="setAbfallUntil" data-setting="abfall_until_hour"></div>
+            </div>
+        </div>
+    </section>
+
+    <!-- ============================================================ -->
+    <section id="widgets">
+        <h2>Widgets</h2>
+        <p class="lede">Was neben dem Kalender zu sehen ist — und wann.</p>
+
+        <div class="group">
+            <h3>Sichtbarkeit</h3>
+            <div class="row" data-vis="widget_abfall">
+                <div class="row-head"><span class="name">Abfall</span><span class="value" data-value-for="widget_abfall">—</span></div>
+                <p class="desc">Dynamisch: nur rund um den Abholtermin.</p>
+                <div class="control seg" data-seg="widget_abfall"></div>
+            </div>
+            <div class="row" data-vis="widget_transit">
+                <div class="row-head"><span class="name">ÖPNV</span><span class="value" data-value-for="widget_transit">—</span></div>
+                <p class="desc">Dynamisch: nur in den unten eingestellten Zeitfenstern.</p>
+                <div class="control seg" data-seg="widget_transit"></div>
+            </div>
+            <div class="row" data-vis="widget_weather">
+                <div class="row-head"><span class="name">Wetter</span><span class="value" data-value-for="widget_weather">—</span></div>
+                <p class="desc">Dynamisch: nur wenn es etwas zu sagen gibt — Regen, Frost, Sturm.</p>
+                <div class="control seg" data-seg="widget_weather"></div>
+            </div>
+            <div class="row" data-vis="widget_travel">
+                <div class="row-head"><span class="name">Fahrzeit</span><span class="value" data-value-for="widget_travel">—</span></div>
+                <p class="desc">Dynamisch: kurz vor einem Termin mit Adresse.</p>
+                <div class="control seg" data-seg="widget_travel"></div>
+            </div>
+            <div class="row" data-vis="widget_qr">
+                <div class="row-head"><span class="name">QR-Code</span><span class="value" data-value-for="widget_qr">—</span></div>
+                <p class="desc">Dynamisch: nur aus der Nähe, aus der Ferne nutzlos.</p>
+                <div class="control seg" data-seg="widget_qr"></div>
+            </div>
+            <div class="row">
+                <div class="row-head"><label for="setQrSize">QR-Größe</label><span class="value" data-value-for="qr_size">—</span></div>
+                <p class="desc">Kantenlänge auf der Wand.</p>
+                <div class="control"><input type="range" id="setQrSize" min="48" max="240" step="8"
+                       data-setting="qr_size" data-unit="px"></div>
+            </div>
+        </div>
+
+        <div class="group">
+            <h3>ÖPNV</h3>
+            <div class="row">
+                <div class="row-head"><label for="stationSearch">Haltestelle</label>
+                    <span class="value" data-value-for="transit_station_name">—</span></div>
+                <p class="desc">Nach Namen suchen; die Auswahl wird gespeichert.</p>
+                <div class="control">
+                    <input type="search" id="stationSearch" placeholder="z. B. Marienplatz">
+                    <div class="results" id="stationResults"></div>
+                </div>
+            </div>
+            <div class="row">
+                <div class="row-head"><label for="setTransitCount">Anzahl Abfahrten</label>
+                    <span class="value" data-value-for="transit_count">—</span></div>
+                <p class="desc">Wie viele Verbindungen die Tafel zeigt.</p>
+                <div class="control"><input type="range" id="setTransitCount" min="1" max="8" step="1"
+                       data-setting="transit_count"></div>
+            </div>
+            <div class="row">
+                <div class="row-head"><label for="setTransitWindows">Zeitfenster</label></div>
+                <p class="desc">Pro Wochentag, z. B. <code>mon=06:30-09:00,16:00-18:30</code>. Leer heißt: an dem Tag nicht anzeigen.</p>
+                <div class="control"><textarea id="setTransitWindows" data-setting="transit_windows" spellcheck="false"></textarea></div>
+            </div>
+            <div class="row">
+                <div class="row-head"><label for="setTransitLines">Nur diese Linien</label></div>
+                <p class="desc">Kommagetrennt. Leer heißt: alle.</p>
+                <div class="control"><input type="text" id="setTransitLines" data-setting="transit_filter_lines" placeholder="S1, U6, 52"></div>
+            </div>
+            <div class="row">
+                <div class="row-head"><label for="setTransitRefresh">Aktualisierung</label>
+                    <span class="value" data-value-for="transit_refresh_seconds">—</span></div>
+                <p class="desc">Nur während das Widget sichtbar und die Wand wach ist.</p>
+                <div class="control"><input type="range" id="setTransitRefresh" min="30" max="600" step="30"
+                       data-setting="transit_refresh_seconds" data-unit="s"></div>
+            </div>
+        </div>
+
+        <div class="group">
+            <h3>Wetter</h3>
+            <div class="row">
+                <div class="row-head"><label for="weatherSearch">Ort</label>
+                    <span class="value" data-value-for="weather_place">—</span></div>
+                <p class="desc">Einmal setzen. Open-Meteo, kein Schlüssel nötig.</p>
+                <div class="control">
+                    <input type="search" id="weatherSearch" placeholder="z. B. Regensburg">
+                    <div class="results" id="weatherResults"></div>
+                </div>
+            </div>
+            <div class="row">
+                <div class="row-head"><span class="name">Einheiten</span>
+                    <span class="value" data-value-for="weather_units">—</span></div>
+                <p class="desc">Celsius und km/h, oder Fahrenheit und mph.</p>
+                <div class="control seg" data-seg="weather_units" data-options="metric:Metrisch|imperial:Imperial"></div>
+            </div>
+        </div>
+
+        <div class="group">
+            <h3>Fahrzeit</h3>
+            <div class="row">
+                <div class="row-head"><label for="homeSearch">Startpunkt</label>
+                    <span class="value" data-value-for="home_lat">—</span></div>
+                <p class="desc">Von hier wird die Fahrzeit zum nächsten Termin gerechnet.</p>
+                <div class="control">
+                    <input type="search" id="homeSearch" placeholder="Adresse oder Ort">
+                    <div class="results" id="homeResults"></div>
+                </div>
+            </div>
+            <div class="row">
+                <div class="row-head"><label for="setTravelWindow">Vorlauf</label>
+                    <span class="value" data-value-for="travel_window_minutes">—</span></div>
+                <p class="desc">So lange vor dem Termin erscheint „Losfahren um“.</p>
+                <div class="control"><input type="range" id="setTravelWindow" min="15" max="240" step="15"
+                       data-setting="travel_window_minutes" data-unit=" min"></div>
+            </div>
+        </div>
+    </section>
+
+    <!-- ============================================================ -->
+    <section id="display">
+        <h2>Anzeige</h2>
+        <p class="lede">Was die Wand zeigt und wie hell.</p>
+
+        <div class="group">
+            <div class="row">
+                <div class="row-head"><span class="name">Nahansicht</span>
+                    <span class="value" data-value-for="near_view">—</span></div>
+                <p class="desc">Zwei Wochen sind gut lesbar, ein Monat zeigt mehr Zeitraum.</p>
+                <div class="control seg" data-seg="near_view"
+                     data-options="fortnight:2 Wochen|month:Monat|agenda:Liste"></div>
+            </div>
+            <div class="row">
+                <div class="row-head"><label for="setBrightness">Helligkeit</label>
+                    <span class="value" data-value-for="brightness">—</span></div>
+                <p class="desc">Wahrgenommene Helligkeit, nicht Tastgrad.</p>
+                <div class="control"><input type="range" id="setBrightness" min="5" max="100" step="5"
+                       data-setting="brightness" data-unit="%"></div>
+            </div>
+            <div class="row">
+                <div class="row-head"><span class="name">Dichte-Umschaltung</span>
+                    <span class="value" data-value-for="density_mode">—</span></div>
+                <p class="desc" id="densityWhy">Wechselt je nach Abstand zwischen Fern- und Nahansicht.</p>
+                <div class="control seg" data-seg="density_mode"
+                     data-options="auto:Automatisch|on:Immer|off:Aus"></div>
+            </div>
+            <div class="row">
+                <div class="row-head"><label for="setCrossfade">Überblendung</label>
+                    <span class="value" data-value-for="crossfade_ms">—</span></div>
+                <p class="desc">Nie hart schneiden.</p>
+                <div class="control"><input type="range" id="setCrossfade" min="0" max="1200" step="50"
+                       data-setting="crossfade_ms" data-unit=" ms"></div>
+            </div>
+            <div class="row">
+                <div class="row-head"><label for="setDrift">Einbrennschutz</label></div>
+                <p class="desc">Das Layout wandert alle paar Minuten um 2–3 px. IPS-Panels merken sich eine feste Uhr über Monate.</p>
+                <div class="control switch">
+                    <input type="checkbox" id="setDrift" data-setting="drift_enabled" data-bool="1">
+                    <label for="setDrift">Aktiv</label>
+                </div>
+            </div>
+            <div class="row">
+                <div class="row-head"><label for="setTimezone">Zeitzone</label>
+                    <span class="value" data-value-for="timezone">—</span></div>
+                <p class="desc"><code>auto</code> übernimmt die Zeitzone des Browsers.</p>
+                <div class="control"><input type="text" id="setTimezone" data-setting="timezone" placeholder="Europe/Berlin"></div>
+            </div>
+            <div class="row">
+                <div class="row-head"><label for="setRotate">Drehung</label>
+                    <span class="value" data-value-for="display_rotate">—</span></div>
+                <p class="desc">Für hochkant montierte Panels.</p>
+                <div class="control seg" data-seg="display_rotate"
+                     data-options="normal:Normal|left:Links|right:Rechts|inverted:Kopf"></div>
+            </div>
+        </div>
+
+        <div class="group">
+            <h3>Bildschirmschoner</h3>
+            <div class="row">
+                <div class="row-head"><span class="name">Stil</span>
+                    <span class="value" data-value-for="screensaver_style">—</span></div>
+                <p class="desc">Aktiv, wenn die Abschaltmethode „none“ ist — dann schläft das Panel nie.</p>
+                <div class="control seg" data-seg="screensaver_style"
+                     data-options="dim_dashboard:Gedimmt|clock:Nur Uhr|blank:Schwarz"></div>
+            </div>
+            <div class="row">
+                <div class="row-head"><label for="setSaverIdle">Wartezeit</label>
+                    <span class="value" data-value-for="screensaver_idle_seconds">—</span></div>
+                <p class="desc">So lange nach der letzten Erkennung, bevor der Schoner übernimmt.</p>
+                <div class="control"><input type="range" id="setSaverIdle" min="30" max="900" step="30"
+                       data-setting="screensaver_idle_seconds" data-unit=" s"></div>
+            </div>
+            <div class="row">
+                <div class="row-head"><label for="setSaverBright">Helligkeit</label>
+                    <span class="value" data-value-for="screensaver_brightness">—</span></div>
+                <p class="desc">Deutlich dunkler als der Normalbetrieb.</p>
+                <div class="control"><input type="range" id="setSaverBright" min="0" max="60" step="1"
+                       data-setting="screensaver_brightness" data-unit="%"></div>
+            </div>
+        </div>
+
+        <div class="group">
+            <h3>Tageszeit-Layout</h3>
+            <div class="row">
+                <div class="row-head"><label for="setTod">Aktiv</label></div>
+                <p class="desc">Morgens der heutige Tag, abends der morgige. Meinungsstark, daher standardmäßig aus.</p>
+                <div class="control switch">
+                    <input type="checkbox" id="setTod" data-setting="timeofday_enabled" data-bool="1">
+                    <label for="setTod">Einschalten</label>
+                </div>
+            </div>
+            <div class="row">
+                <div class="row-head"><label for="setTodMorning">Morgen bis</label>
+                    <span class="value" data-value-for="timeofday_morning_until">—</span></div>
+                <p class="desc">Bis hierhin gilt das Morgen-Layout.</p>
+                <div class="control"><input type="time" id="setTodMorning" data-setting="timeofday_morning_until"></div>
+            </div>
+            <div class="row">
+                <div class="row-head"><label for="setTodEvening">Abend ab</label>
+                    <span class="value" data-value-for="timeofday_evening_from">—</span></div>
+                <p class="desc">Ab hier gilt das Abend-Layout.</p>
+                <div class="control"><input type="time" id="setTodEvening" data-setting="timeofday_evening_from"></div>
+            </div>
+        </div>
+    </section>
+
+    <!-- ============================================================ -->
+    <section id="presence">
+        <h2>Präsenz</h2>
+        <p class="lede">Wann die Wand aufwacht und wann sie wieder schläft.</p>
+
+        <!-- The signature element: live data from a sensor in the room. -->
+        <div class="meter-card">
+            <div class="meter-top">
+                <div class="meter-dist"><span id="meterDist">—</span><small>cm</small></div>
+                <div class="meter-state" id="meterState">offline</div>
+            </div>
+            <div class="meter-track" id="meterTrack">
+                <div class="meter-fill" id="meterFill"></div>
+                <div class="meter-mark" data-kind="near" id="markNear"></div>
+                <div class="meter-mark" data-kind="far" id="markFar"></div>
+                <div class="meter-mark" data-kind="wake" id="markWake"></div>
+            </div>
+            <div class="meter-scale"><span>0 m</span><span>3 m</span><span>6 m</span></div>
+            <div class="meter-legend">
+                <span><i style="background:var(--alert)"></i>Weckdistanz</span>
+                <span><i style="background:#A97BE8"></i>Nah ab</span>
+                <span><i style="background:#5B8DEF"></i>Fern ab</span>
+            </div>
+        </div>
+
+        <div class="group">
+            <h3>Kalibrierung</h3>
+            <div class="calib" id="calibIdle">
+                <p class="desc" style="text-align:center;margin-bottom:12px">
+                    Stell dich dorthin, wo der Kalender aufwachen soll. Der Countdown gibt dir Zeit hinzugehen.
+                </p>
+                <button class="btn" id="calibStart" style="width:100%">Messen</button>
+            </div>
+            <div class="calib" id="calibRun" hidden>
+                <div class="calib-count" id="calibCount">—</div>
+                <div class="calib-msg" id="calibMsg"></div>
+                <div class="calib-live">
+                    <div><b id="calibNow">—</b><span>jetzt</span></div>
+                    <div><b id="calibMax">—</b><span>weiteste</span></div>
+                    <div><b id="calibFrames">—</b><span>Messungen</span></div>
+                </div>
+                <button class="btn ghost" id="calibCancel" style="width:100%;margin-top:14px">Abbrechen</button>
+            </div>
+            <div class="calib" id="calibDone" hidden>
+                <div class="calib-count" id="calibResult">—</div>
+                <div class="calib-msg">vorgeschlagene Weckdistanz</div>
+                <button class="btn" id="calibApply" style="width:100%;margin-top:14px">Übernehmen</button>
+            </div>
+            <div id="calibError"></div>
+        </div>
+
+        <div class="group">
+            <div class="row">
+                <div class="row-head"><label for="setWake">Weckdistanz</label>
+                    <span class="value" data-value-for="sensor_distance_max_cm">—</span></div>
+                <p class="desc">Wer näher als das ist, weckt die Wand.</p>
+                <div class="control"><input type="range" id="setWake" min="30" max="600" step="10"
+                       data-setting="sensor_distance_max_cm" data-unit=" cm"></div>
+            </div>
+            <div class="row">
+                <div class="row-head"><label for="setHold">Nachlaufzeit</label>
+                    <span class="value" data-value-for="display_off_timeout">—</span></div>
+                <p class="desc">So lange bleibt die Wand nach der letzten Erkennung an.</p>
+                <div class="control"><input type="range" id="setHold" min="10" max="600" step="10"
+                       data-setting="display_off_timeout" data-unit=" s"></div>
+            </div>
+            <div class="row">
+                <div class="row-head"><label for="setDimSeconds">Abdunkeln vor Aus</label>
+                    <span class="value" data-value-for="dim_seconds">—</span></div>
+                <p class="desc">Kurz dunkler werden, bevor es ausgeht — Zeit, sich zu bewegen. 0 schaltet direkt aus.</p>
+                <div class="control"><input type="range" id="setDimSeconds" min="0" max="120" step="5"
+                       data-setting="dim_seconds" data-unit=" s"></div>
+            </div>
+            <div class="row">
+                <div class="row-head"><label for="setDimLevel">Helligkeit dabei</label>
+                    <span class="value" data-value-for="dim_level">—</span></div>
+                <p class="desc">Auf diesen Wert wird abgedunkelt.</p>
+                <div class="control"><input type="range" id="setDimLevel" min="0" max="80" step="5"
+                       data-setting="dim_level" data-unit="%"></div>
+            </div>
+            <div class="row">
+                <div class="row-head"><label for="setRelease">Toleranz beim Verlassen</label>
+                    <span class="value" data-value-for="sensor_hysteresis_cm">—</span></div>
+                <p class="desc">Zusätzlicher Abstand, bevor die Erkennung abfällt — verhindert Flackern am Rand.</p>
+                <div class="control"><input type="range" id="setRelease" min="0" max="150" step="10"
+                       data-setting="sensor_hysteresis_cm" data-unit=" cm"></div>
+            </div>
+            <div class="row">
+                <div class="row-head"><label for="setConfirm">Bestätigungszeit</label>
+                    <span class="value" data-value-for="presence_confirm_ms">—</span></div>
+                <p class="desc">So lange muss die Erkennung halten, bevor geweckt wird. Filtert Radar-Aussetzer.</p>
+                <div class="control"><input type="range" id="setConfirm" min="0" max="3000" step="100"
+                       data-setting="presence_confirm_ms" data-unit=" ms"></div>
+            </div>
+            <div class="row">
+                <div class="row-head"><label for="setMoving">Empfindlichkeit Bewegung</label>
+                    <span class="value" data-value-for="sensor_moving_energy_min">—</span></div>
+                <p class="desc">Mindest-Signalstärke. Kleiner ist empfindlicher.</p>
+                <div class="control"><input type="range" id="setMoving" min="0" max="100" step="1"
+                       data-setting="sensor_moving_energy_min"></div>
+            </div>
+            <div class="row">
+                <div class="row-head"><label for="setStill">Empfindlichkeit Ruhe</label>
+                    <span class="value" data-value-for="sensor_stationary_energy_min">—</span></div>
+                <p class="desc">Für jemanden, der still davorsteht und liest.</p>
+                <div class="control"><input type="range" id="setStill" min="0" max="100" step="1"
+                       data-setting="sensor_stationary_energy_min"></div>
+            </div>
+        </div>
+
+        <div class="group">
+            <h3>Dichte-Schwellen</h3>
+            <div class="row">
+                <div class="row-head"><label for="setNearCm">Nah ab</label>
+                    <span class="value" data-value-for="density_near_cm">—</span></div>
+                <p class="desc">Näher als das zeigt die Wand die Detailansicht. Siehe Markierung im Messbalken.</p>
+                <div class="control"><input type="range" id="setNearCm" min="30" max="400" step="10"
+                       data-setting="density_near_cm" data-unit=" cm"></div>
+            </div>
+            <div class="row">
+                <div class="row-head"><label for="setFarCm">Wieder fern ab</label>
+                    <span class="value" data-value-for="density_far_cm">—</span></div>
+                <p class="desc">Muss größer sein als „Nah ab“, sonst springt das Layout am Übergang hin und her.</p>
+                <div class="control"><input type="range" id="setFarCm" min="40" max="500" step="10"
+                       data-setting="density_far_cm" data-unit=" cm"></div>
+            </div>
+        </div>
+
+        <div class="group">
+            <h3>Ruhezeiten</h3>
+            <div class="row">
+                <div class="row-head"><span class="name">Nachtmodus</span>
+                    <span class="value" data-value-for="night_mode">—</span></div>
+                <p class="desc">Was außerhalb des Zeitfensters passiert.</p>
+                <div class="control seg" data-seg="night_mode"
+                     data-options="off:Aus|dim_clock:Dunkle Uhr|never_wake:Nie wecken"></div>
+            </div>
+            <div class="row">
+                <div class="row-head"><label for="setSchedStart">Fenster von</label>
+                    <span class="value" data-value-for="schedule_start">—</span></div>
+                <p class="desc">Ab hier verhält sich die Wand normal.</p>
+                <div class="control"><input type="time" id="setSchedStart" data-setting="schedule_start"></div>
+            </div>
+            <div class="row">
+                <div class="row-head"><label for="setSchedEnd">Fenster bis</label>
+                    <span class="value" data-value-for="schedule_end">—</span></div>
+                <p class="desc">Danach gilt der Nachtmodus.</p>
+                <div class="control"><input type="time" id="setSchedEnd" data-setting="schedule_end"></div>
+            </div>
+            <div class="row">
+                <div class="row-head"><label for="setNightBright">Helligkeit nachts</label>
+                    <span class="value" data-value-for="night_brightness">—</span></div>
+                <p class="desc">Für die dunkle Uhr.</p>
+                <div class="control"><input type="range" id="setNightBright" min="0" max="60" step="1"
+                       data-setting="night_brightness" data-unit="%"></div>
+            </div>
+        </div>
+
+        <div class="group">
+            <h3>Vorausschauendes Wecken</h3>
+            <div class="row">
+                <div class="row-head"><label for="setPrewake">Aktiv</label></div>
+                <p class="desc">Weckt die Wand kurz vor einem Termin, damit sie schon an ist.</p>
+                <div class="control switch">
+                    <input type="checkbox" id="setPrewake" data-setting="prewake_enabled" data-bool="1">
+                    <label for="setPrewake">Einschalten</label>
+                </div>
+                <p class="desc" id="prewakeNext"></p>
+            </div>
+            <div class="row">
+                <div class="row-head"><label for="setPrewakeLead">Vorlauf</label>
+                    <span class="value" data-value-for="prewake_lead_minutes">—</span></div>
+                <p class="desc">So lange vor Terminbeginn.</p>
+                <div class="control"><input type="range" id="setPrewakeLead" min="5" max="120" step="5"
+                       data-setting="prewake_lead_minutes" data-unit=" min"></div>
+            </div>
+            <div class="row">
+                <div class="row-head"><label for="setPrewakeTimed">Nur Termine mit Uhrzeit</label></div>
+                <p class="desc">Ganztägige Termine haben keine sinnvolle Startzeit — sonst würde um 00:00 geweckt.</p>
+                <div class="control switch">
+                    <input type="checkbox" id="setPrewakeTimed" data-setting="prewake_timed_only" data-bool="1">
+                    <label for="setPrewakeTimed">Nur mit Uhrzeit</label>
+                </div>
+            </div>
+            <div class="row">
+                <div class="row-head"><label for="setPrewakeAllday">Ganztägig wecken um</label>
+                    <span class="value" data-value-for="prewake_allday_at">—</span></div>
+                <p class="desc">Gilt nur, wenn ganztägige Termine mitzählen.</p>
+                <div class="control"><input type="time" id="setPrewakeAllday" data-setting="prewake_allday_at"></div>
+            </div>
+        </div>
+
+        <div class="group">
+            <h3>Manuelle Steuerung</h3>
+            <div class="row">
+                <div class="row-head"><span class="name">Anzeige</span>
+                    <span class="value" id="overrideValue">automatisch</span></div>
+                <p class="desc">Übersteuert die Erkennung, bis du sie zurückstellst.</p>
+                <div class="control seg" id="overrideSeg">
+                    <button data-mode="auto">Automatisch</button>
+                    <button data-mode="on">Immer an</button>
+                    <button data-mode="off">Aus</button>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- ============================================================ -->
+    <section id="system">
+        <h2>System</h2>
+        <p class="lede">Zustand des Geräts und der Dienste.</p>
+
+        <div class="group">
+            <div class="diag" id="diag"></div>
+        </div>
+
+        <div class="group">
+            <h3>Datenquellen</h3>
+            <div id="feedHealth"></div>
+        </div>
+
+        <div class="group">
+            <div class="row">
+                <div class="row-head"><span class="name">Jetzt synchronisieren</span></div>
+                <p class="desc">Holt alle Kalender sofort neu.</p>
+                <div class="control"><button class="btn ghost" id="syncNow">Synchronisieren</button></div>
+            </div>
+            <div class="row">
+                <div class="row-head"><span class="name">Browser neu starten</span></div>
+                <p class="desc">Startet den Kiosk-Browser auf der Wand neu.</p>
+                <div class="control"><button class="btn ghost" id="restartKiosk">Neu starten</button></div>
+            </div>
+        </div>
+    </section>
+
+    <!-- ============================================================ -->
+    <section id="advanced">
+        <h2>Erweitert</h2>
+        <p class="lede">Hardware-nah. Wer hier nichts ändert, bekommt sinnvolle Automatik.</p>
+
+        <div class="group">
+            <h3>Abschaltmethode</h3>
+            <div class="row">
+                <div class="row-head"><label for="setOffStrategy">display_off_strategy</label>
+                    <span class="value" data-value-for="display_off_strategy">—</span></div>
+                <p class="desc">Kommagetrennt kombinierbar: <code>pwm,hdmi</code> dimmt und schaltet den Ausgang ab.</p>
+                <div class="control"><input type="text" id="setOffStrategy" data-setting="display_off_strategy"
+                       placeholder="hdmi | pwm | css | none"></div>
+                <p class="consequence">„none“ schaltet nie ab — der Bildschirmschoner übernimmt.</p>
+            </div>
+            <div class="row">
+                <div class="row-head"><label for="setBackend">display_backend</label>
+                    <span class="value" data-value-for="display_backend">—</span></div>
+                <p class="desc"><code>auto</code> erkennt selbst. Sonst z. B. <code>xset,cec</code>.</p>
+                <div class="control"><input type="text" id="setBackend" data-setting="display_backend"></div>
+            </div>
+        </div>
+
+        <div class="group">
+            <h3>PWM-Hintergrundbeleuchtung</h3>
+            <div class="row">
+                <div class="row-head"><label for="setPwmGpio">pwm_gpio</label>
+                    <span class="value" data-value-for="pwm_gpio">—</span></div>
+                <p class="desc">Hardware-PWM nur auf GPIO 12, 13, 18 oder 19.</p>
+                <div class="control"><input type="number" id="setPwmGpio" data-setting="pwm_gpio" min="0" max="27"></div>
+                <p class="consequence" id="pwmOverlay"></p>
+            </div>
+            <div class="row">
+                <div class="row-head"><label for="setPwmFreq">pwm_frequency_hz</label>
+                    <span class="value" data-value-for="pwm_frequency_hz">—</span></div>
+                <p class="desc">Unter etwa 200 Hz ist das Flimmern sichtbar.</p>
+                <div class="control"><input type="number" id="setPwmFreq" data-setting="pwm_frequency_hz" min="100" max="20000" step="100"></div>
+            </div>
+            <div class="row">
+                <div class="row-head"><label for="setPwmGamma">pwm_gamma</label>
+                    <span class="value" data-value-for="pwm_gamma">—</span></div>
+                <p class="desc">Wahrgenommene Helligkeit ≈ Tastgrad^(1/gamma).</p>
+                <div class="control"><input type="number" id="setPwmGamma" data-setting="pwm_gamma" min="1" max="4" step="0.1"></div>
+            </div>
+            <div class="row">
+                <div class="row-head"><label for="setPwmFloor">pwm_min_duty_percent</label>
+                    <span class="value" data-value-for="pwm_min_duty_percent">—</span></div>
+                <p class="desc">Viele Treiber setzen unter 2–5 % aus.</p>
+                <div class="control"><input type="number" id="setPwmFloor" data-setting="pwm_min_duty_percent" min="0" max="50" step="0.5"></div>
+            </div>
+            <div class="row">
+                <div class="row-head"><label for="setPwmFade">pwm_fade_ms</label>
+                    <span class="value" data-value-for="pwm_fade_ms">—</span></div>
+                <p class="desc">Rampendauer statt Sprung.</p>
+                <div class="control"><input type="number" id="setPwmFade" data-setting="pwm_fade_ms" min="0" max="10000" step="100"></div>
+            </div>
+            <div class="row">
+                <div class="row-head"><label for="setBlEn">pwm_enable_gpio</label>
+                    <span class="value" data-value-for="pwm_enable_gpio">—</span></div>
+                <p class="desc"><code>BL_EN</code> für echtes Aus. <code>-1</code> heißt: nicht verdrahtet.</p>
+                <div class="control"><input type="number" id="setBlEn" data-setting="pwm_enable_gpio" min="-1" max="27"></div>
+            </div>
+        </div>
+
+        <div class="group">
+            <h3>Sensor</h3>
+            <div class="row">
+                <div class="row-head"><label for="setSensorMode">sensor_mode</label>
+                    <span class="value" data-value-for="sensor_mode">—</span></div>
+                <p class="desc"><code>auto</code> sucht den Radar seriell und fällt auf den OUT-Pin zurück.</p>
+                <div class="control seg" data-seg="sensor_mode"
+                     data-options="auto:auto|uart:uart|gpio:gpio|none:none"></div>
+            </div>
+            <div class="row">
+                <div class="row-head"><label for="setSensorPin">sensor_gpio_pin</label>
+                    <span class="value" data-value-for="sensor_gpio_pin">—</span></div>
+                <p class="desc">OUT-Pin, nur im GPIO-Modus benutzt.</p>
+                <div class="control"><input type="number" id="setSensorPin" data-setting="sensor_gpio_pin" min="0" max="27"></div>
+                <p class="consequence" id="pinConflict"></p>
+            </div>
+            <div class="row">
+                <div class="row-head"><label for="setUartPort">sensor_uart_port</label>
+                    <span class="value" data-value-for="sensor_uart_port">—</span></div>
+                <p class="desc"><code>auto</code> oder ein Gerätepfad.</p>
+                <div class="control"><input type="text" id="setUartPort" data-setting="sensor_uart_port"></div>
+            </div>
+            <div class="row">
+                <div class="row-head"><label for="setUartBaud">sensor_uart_baud</label>
+                    <span class="value" data-value-for="sensor_uart_baud">—</span></div>
+                <p class="desc">Werkseinstellung des LD2410C ist 256000.</p>
+                <div class="control"><input type="number" id="setUartBaud" data-setting="sensor_uart_baud"></div>
+            </div>
+        </div>
+
+        <!-- Destructive actions: separated, last, confirmed. -->
+        <div class="danger-zone">
+            <h3>Irreversibel</h3>
+            <div class="row">
+                <div class="row-head"><span class="name">Radar zurücksetzen</span></div>
+                <p class="desc">Setzt den LD2410C auf Werkseinstellungen zurück. Alle Gates und Empfindlichkeiten gehen verloren; danach ist eine neue Kalibrierung nötig.</p>
+                <div class="control"><button class="btn danger" id="radarReset">Zurücksetzen</button></div>
+            </div>
+        </div>
+    </section>
+
+</div>
+<script src="{{ static_url('js/settings.js') }}"></script>
+</body>
+</html>

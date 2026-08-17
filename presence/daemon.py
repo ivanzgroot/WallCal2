@@ -55,6 +55,7 @@ SENSOR_HOLD_SECONDS = 1
 MODE_NORMAL = "normal"
 MODE_DIMMING = "dimming"
 MODE_NIGHT = "night"
+MODE_SAVER = "screensaver"
 
 
 # ---------------------------------------------------------------------------
@@ -144,6 +145,21 @@ class Settings:
             self.night_mode = "off"
         self.night_brightness = max(0, min(100, _as_int(
             g("night_brightness"), config.DEFAULT_NIGHT_BRIGHTNESS)))
+
+        self.screensaver_style = str(g("screensaver_style")
+                                     or config.DEFAULT_SCREENSAVER_STYLE).lower()
+        if self.screensaver_style not in ("dim_dashboard", "clock", "blank"):
+            self.screensaver_style = "dim_dashboard"
+        self.screensaver_idle = max(0, _as_int(
+            g("screensaver_idle_seconds"), config.DEFAULT_SCREENSAVER_IDLE_SECONDS))
+        self.screensaver_brightness = max(0, min(100, _as_int(
+            g("screensaver_brightness"), config.DEFAULT_SCREENSAVER_BRIGHTNESS)))
+
+    @property
+    def never_off(self) -> bool:
+        """True when the panel never sleeps, so it needs something to show."""
+        return "none" in [p.strip().lower()
+                          for p in str(self.off_strategy).split(",")]
 
     @property
     def schedule_enabled(self) -> bool:
@@ -779,6 +795,11 @@ class PresenceDaemon:
         if wake_until and time.time() < wake_until:
             return True, MODE_NORMAL, "manual-wake"
 
+        # The web app publishes this; the daemon has no calendar access and
+        # deliberately no database dependency beyond its own settings.
+        if runtime.wake_plan_active(command):
+            return True, MODE_NORMAL, "calendar-wake"
+
         # While a tool holds the sensor we have no presence data, so keep the
         # panel on rather than blanking it under whoever is calibrating.
         if self._paused:
@@ -813,6 +834,18 @@ class PresenceDaemon:
 
         if idle < hold:
             return True, awake_mode, "presence-hold"
+
+        # With the "none" strategy the panel cannot go dark, so the terminal
+        # idle state is a screensaver rather than off. Between the hold
+        # expiring and the screensaver engaging it sits dim — there is
+        # nothing to go dark to, and leaving the full layout up is what burns
+        # a panel in.
+        if self.settings.never_off:
+            if idle >= hold + self.settings.screensaver_idle:
+                return True, MODE_SAVER, "screensaver"
+            return (True, MODE_DIMMING if dim_for else awake_mode,
+                    "screensaver-wait")
+
         if dim_for and idle < hold + dim_for:
             # Still lit, just dimmer — it should read as the display
             # considering rather than deciding, and give whoever is there a
@@ -894,6 +927,8 @@ class PresenceDaemon:
             return self.settings.dim_level
         if mode == MODE_NIGHT:
             return self.settings.night_brightness
+        if mode == MODE_SAVER:
+            return self.settings.screensaver_brightness
         return None
 
     def _set_mode(self, mode: str, reason: str = "") -> None:
@@ -938,6 +973,11 @@ class PresenceDaemon:
             "present_cause": self._present_cause,
             "display_mode": self._mode,
             "dimming": self._mode == MODE_DIMMING,
+            "screensaver": {
+                "active": self._mode == MODE_SAVER,
+                "style": self.settings.screensaver_style,
+                "idle_seconds": self.settings.screensaver_idle,
+            },
             "paused": self._paused,
             "idle_seconds": idle,
             "display_on": self._display_on,
@@ -978,6 +1018,12 @@ class PresenceDaemon:
                 "night_brightness": self.settings.night_brightness,
             },
             "override": str(getattr(self, "_command", {}).get("override", "auto")),
+            "wake_plan": {
+                "label": str(getattr(self, "_command", {}).get("wake_plan_label", "")),
+                "from": float(getattr(self, "_command", {}).get("wake_plan_from", 0) or 0),
+                "until": float(getattr(self, "_command", {}).get("wake_plan_until", 0) or 0),
+                "active": runtime.wake_plan_active(getattr(self, "_command", None)),
+            },
             "wake_count": self._wake_count,
             "display_on_seconds_today": round(on_today, 1),
             "uptime_seconds": round(time.time() - self._started_at, 1),
