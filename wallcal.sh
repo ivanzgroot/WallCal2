@@ -138,6 +138,13 @@ on_error() {
   fi
   _ERROR_REPORTED=1
   err "failed at line $line (exit $exit_code)"
+  # Anything routed through run()/as_user()/as_root() reports the helper's own
+  # line, which is identical for every command in the script and says nothing
+  # about what actually failed. Walk the call stack out to the real caller.
+  local i
+  for (( i = 1; i < ${#FUNCNAME[@]} - 1; i++ )); do
+    err "    in ${FUNCNAME[i]}() called at line ${BASH_LINENO[i-1]}"
+  done
   [[ -f "$INSTALL_LOG" ]] && err "recent log: tail -n 40 $INSTALL_LOG"
   exit "$exit_code"
 }
@@ -992,9 +999,39 @@ EOF
   fi
 }
 
+# The installer is meant to be run with sudo, but everything it creates inside
+# the checkout has to end up owned by the desktop user: the app, the database
+# and the venv all run as them, and a root-owned database is the one state
+# this script works hardest to avoid. A checkout that is itself root-owned —
+# cloned or copied with sudo — makes that impossible, and without this check
+# the first symptom is a bare "mkdir: Permission denied" from a command that
+# looks like it should obviously have the rights.
+ensure_app_dir_writable() {
+  if as_user test -w "$APP_DIR" 2>/dev/null; then
+    return 0
+  fi
+  local owner group
+  owner="$(stat -c '%U' "$APP_DIR" 2>/dev/null || echo 'someone else')"
+  group="$(id -gn "$RUN_USER" 2>/dev/null || echo "$RUN_USER")"
+
+  warn "$APP_DIR belongs to $owner, but WallCal runs as $RUN_USER"
+  say "  The database, the virtualenv and the event cache all live in here and"
+  say "  are written by $RUN_USER, so the checkout has to belong to them."
+  say "  This normally means the repo was cloned or copied with sudo."
+  say
+
+  if [[ $EUID -eq 0 ]] && confirm "Change the owner of $APP_DIR to $RUN_USER?"; then
+    run chown -R "$RUN_USER:$group" "$APP_DIR"
+    ok "$APP_DIR now belongs to $RUN_USER"
+    return 0
+  fi
+  die "fix it with: sudo chown -R $RUN_USER:$group $APP_DIR"
+}
+
 cmd_install() {
   banner
   title "Installing $APP_NAME"
+  ensure_app_dir_writable
   as_user mkdir -p "$DATA_DIR" "$BACKUP_DIR"
 
   local step
@@ -1222,6 +1259,9 @@ cmd_logs() {
 
 cmd_update() {
   title "Updating $APP_NAME"
+  # 'sudo ./wallcal.sh update' hits the same trap as install: the pull and the
+  # venv rebuild both run as RUN_USER.
+  ensure_app_dir_writable
   if [[ -d "$APP_DIR/.git" ]]; then
     info "pulling latest code"
     as_user git -C "$APP_DIR" pull --ff-only || warn "git pull failed — continuing with local code"
@@ -1667,6 +1707,22 @@ cmd_doctor() {
   chk ok "model: $(pi_model)"
   chk ok "os: $(os_pretty)"
   chk ok "kernel: $(uname -r)"
+
+  # A root-owned checkout breaks far more than the installer: the services run
+  # as RUN_USER and cannot write the database, the cache or the log.
+  if as_user test -w "$APP_DIR" 2>/dev/null; then
+    chk ok "checkout writable by $RUN_USER"
+  else
+    local dir_owner; dir_owner="$(stat -c '%U' "$APP_DIR" 2>/dev/null || echo '?')"
+    if (( FIX_MODE )); then
+      as_root chown -R "$RUN_USER:$(id -gn "$RUN_USER")" "$APP_DIR"
+      chk ok "checkout ownership repaired ($dir_owner -> $RUN_USER)"
+    else
+      chk fail "$APP_DIR belongs to $dir_owner, not $RUN_USER" \
+        "the services run as $RUN_USER and cannot write the database here" \
+        "sudo chown -R $RUN_USER:$(id -gn "$RUN_USER" 2>/dev/null || echo "$RUN_USER") $APP_DIR"
+    fi
+  fi
   if have vcgencmd; then
     local throttled; throttled="$(vcgencmd get_throttled 2>/dev/null | cut -d= -f2 || true)"
     if [[ -z "$throttled" ]]; then
