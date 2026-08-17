@@ -19,63 +19,53 @@
     <link rel="stylesheet" href="{{ static_url('css/settings.css') }}">
 </head>
 <body data-theme="dark" data-animations="off">
-    <div id="app">
-        <!-- ============================================================
-             HEADER
-             ============================================================ -->
-        <header class="header">
-            <div class="header-left">
-                <span class="header-clock" id="clock">00:00</span>
-                <span class="header-date" id="dateDisplay">Loading...</span>
-            </div>
-            <div class="header-right">
-                <span class="sync-status">
-                    <span class="sync-dot" id="syncDot"></span>
-                    <span id="syncText">Syncing...</span>
-                </span>
-                <button class="btn-icon" id="themeToggle" title="Toggle theme">☀</button>
-                <button class="btn-icon" id="refreshBtn" title="Refresh now">⟳</button>
-                <button class="btn-icon" id="settingsBtn" title="Settings">⚙</button>
-            </div>
-        </header>
+    <!-- ============================================================
+         THE WALL DISPLAY
 
-        <!-- ============================================================
-             MAIN CONTENT
-             ============================================================ -->
-        <div class="main">
-            <!-- Calendar Grid -->
-            <div class="calendar-panel">
-                <div class="cal-nav">
-                    <div class="cal-nav-buttons">
-                        <button class="cal-nav-btn" id="prevMonth" title="Previous month">◀</button>
-                        <button class="cal-nav-btn today-btn" id="todayBtn">Today</button>
-                        <button class="cal-nav-btn" id="nextMonth" title="Next month">▶</button>
+         Both density layers stay in the DOM and stay current. Switching
+         is a class change, so the crossfade is opacity only — never a
+         re-fetch, never a reflow that could flash on the panel.
+         ============================================================ -->
+    <div id="app" data-density="far" data-mode="normal" data-drift="on"
+         data-power="on" data-brightness-source="css">
+        <div id="dim"></div>
+
+        <div id="drift">
+            <!-- ---------- FAR: readable across the room ---------- -->
+            <section id="far" class="layer">
+                <div class="label" id="farDate">&nbsp;</div>
+                <div class="far-clock" id="farClock">--:--</div>
+                <div class="far-next" id="farNext"></div>
+                <div class="far-wx" id="farWeather" hidden></div>
+                <div class="far-bin" id="farBin" hidden></div>
+            </section>
+
+            <!-- ---------- NEAR: the calendar, at arm's length ---------- -->
+            <section id="near" class="layer">
+                <header class="near-bar">
+                    <span class="near-clock" id="nearClock">--:--</span>
+                    <span class="near-date" id="nearDate">&nbsp;</span>
+                    <span class="spacer"></span>
+                    <span class="stale" id="staleDot" title="Data is older than usual"></span>
+                </header>
+
+                <div class="near-body">
+                    <div class="cal">
+                        <div class="cal-title" id="calTitle">&nbsp;</div>
+                        <div class="cal-dow" id="calDow"></div>
+                        <div class="cal-grid" id="calGrid"></div>
                     </div>
-                    <h1 class="cal-nav-title" id="monthTitle">June 2026</h1>
-                </div>
-                <div class="cal-dow" id="dowHeader"></div>
-                <div class="cal-grid" id="calGrid"></div>
-            </div>
 
-            <!-- Agenda Sidebar -->
-            <div class="agenda-panel">
-                <div class="agenda-header">
-                    <h2 class="agenda-title" id="agendaTitle">Upcoming</h2>
-                    <p class="agenda-subtitle" id="agendaSubtitle">Next 14 days</p>
+                    <aside class="rail">
+                        <div class="rail-k">Als n&auml;chstes</div>
+                        <div id="railList"></div>
+                        <div class="rail-foot" id="railFoot"></div>
+                    </aside>
                 </div>
-                <div class="agenda-list" id="agendaList">
-                    <div class="agenda-empty">No events</div>
-                </div>
-            </div>
+            </section>
         </div>
 
-        <!-- ============================================================
-             FOOTER
-             ============================================================ -->
-        <footer class="footer">
-            <span id="footerLeft">WallCal</span>
-            <span id="footerRight">—</span>
-        </footer>
+        <button id="settingsBtn" title="Einstellungen" aria-label="Einstellungen">&#9881;</button>
     </div>
 
     <!-- ================================================================

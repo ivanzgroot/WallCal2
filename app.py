@@ -276,6 +276,33 @@ def get_presence():
     return jsonify(state)
 
 
+@app.route("/api/presence/live")
+def get_presence_live():
+    """Just the fields the wall display polls twice a second.
+
+    Density switching needs sub-second latency, and /api/presence returns the
+    full sensor telemetry — several kB of radar frame that nothing on the wall
+    reads. This is the same tmpfs file filtered to about 100 bytes.
+
+    Deliberately polling rather than SSE: this app runs Flask's own server
+    with no gunicorn or gevent behind it, so an event stream held open for
+    months would pin a worker thread on a Pi 3B+ for the entire uptime.
+    """
+    state = presence_runtime.read_state()
+    reading = state.get("reading") or {}
+    return jsonify({
+        "present": state.get("present"),
+        "display_on": state.get("display_on"),
+        "display_mode": state.get("display_mode", "normal"),
+        "brightness": state.get("brightness", 100),
+        "brightness_source": state.get("brightness_source", "css"),
+        # None in gpio and none sensor modes, which have no distance at all —
+        # the wall display falls back to a single layout when it sees that.
+        "distance_cm": reading.get("distance_cm"),
+        "daemon_running": state.get("daemon_running", False),
+    })
+
+
 @app.route("/api/presence/override", methods=["POST"])
 def set_presence_override():
     """Force the display on/off, or hand control back to the sensor."""

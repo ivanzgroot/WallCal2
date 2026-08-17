@@ -127,329 +127,483 @@ function apiDelete(url, cb) {
 }
 
 // ===============================================================
-// CLOCK
+// LOCALE
+//
+// One formatter set, built once from the configured timezone and locale.
+// Rebuilt only when those settings change — Intl.DateTimeFormat is not
+// cheap enough to construct on a Pi 3B+ once per cell per minute.
 // ===============================================================
-function updateClock() {
-    var now = new Date();
-    var h = now.getHours();
-    var m = now.getMinutes();
-    $('clock').textContent = (h < 10 ? '0' : '') + h + ':' + (m < 10 ? '0' : '') + m;
-    $('dateDisplay').textContent = formatDate(now);
+var fmt = null;
+
+function buildFormatters() {
+    var loc = state.settings.locale || 'de-DE';
+    var tz = state.settings.timezone || 'auto';
+    var opts = (tz && tz !== 'auto') ? { timeZone: tz } : {};
+    function f(extra) {
+        var o = {}, k;
+        for (k in opts) o[k] = opts[k];
+        for (k in extra) o[k] = extra[k];
+        try { return new Intl.DateTimeFormat(loc, o); }
+        catch (e) { return new Intl.DateTimeFormat('de-DE', extra); }
+    }
+    fmt = {
+        time:      f({ hour: '2-digit', minute: '2-digit', hour12: false }),
+        weekdayLg: f({ weekday: 'long' }),
+        weekdaySm: f({ weekday: 'short' }),
+        dayMonth:  f({ day: 'numeric', month: 'long' }),
+        dayMonthSm:f({ day: 'numeric', month: 'short' }),
+        monthYear: f({ month: 'long', year: 'numeric' }),
+        dayNum:    f({ day: 'numeric' })
+    };
+}
+
+function fdate(formatter, d) {
+    if (!fmt) buildFormatters();
+    try { return formatter.format(d); } catch (e) { return ''; }
+}
+
+// Week number, ISO — Germans think in Kalenderwochen and it is the cheapest
+// way to label a fortnight's two rows without spending horizontal space.
+function isoWeek(d) {
+    var t = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+    t.setUTCDate(t.getUTCDate() + 4 - (t.getUTCDay() || 7));
+    var start = new Date(Date.UTC(t.getUTCFullYear(), 0, 1));
+    return Math.ceil((((t - start) / 86400000) + 1) / 7);
+}
+
+function startOfWeek(d) {
+    var out = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+    out.setDate(out.getDate() - ((out.getDay() + 6) % 7));   // Monday = 0
+    return out;
 }
 
 // ===============================================================
-// CALENDAR GRID
+// EVENT INDEX
+//
+// Built once per fetch and reused by both layers, so a density switch
+// never costs a re-index.
 // ===============================================================
-function renderCalendar() {
-    var year = state.viewYear;
-    var month = state.viewMonth;
-    var months = ['January','February','March','April','May','June',
-                 'July','August','September','October','November','December'];
-    $('monthTitle').textContent = months[month] + ' ' + year;
-
-    // Day-of-week header
-    var dowEl = $('dowHeader');
-    dowEl.innerHTML = '';
-    var dowNames = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
-    for (var i = 0; i < 7; i++) {
-        var span = document.createElement('span');
-        span.textContent = dowNames[i];
-        dowEl.appendChild(span);
-    }
-
-    // Build day cells
-    var grid = $('calGrid');
-    grid.innerHTML = '';
-
-    var firstDay = new Date(year, month, 1);
-    var startDow = (firstDay.getDay() + 6) % 7; // Monday = 0
-    var daysInMonth = new Date(year, month + 1, 0).getDate();
-    var today = new Date();
-
-    // Previous month padding
-    var prevMonthDays = new Date(year, month, 0).getDate();
-    var startDate = prevMonthDays - startDow + 1;
-
-    // Build event map: dateKey -> array of events
-    var eventMap = {};
-    for (var e = 0; e < state.events.length; e++) {
-        var ev = state.events[e];
-        var evStart = parseUTC(ev.dtstart);
-        var evEnd = ev.dtend ? parseUTC(ev.dtend) : evStart;
-
+function buildEventIndex() {
+    var map = {}, i, ev, cursor, key, end;
+    for (i = 0; i < state.events.length; i++) {
+        ev = state.events[i];
+        var startAt = parseUTC(ev.dtstart);
+        if (!startAt) continue;
         if (ev.all_day) {
-            // Span all days
-            var cursor = new Date(evStart);
-            while (cursor < evEnd) {
-                var dk = dateKey(cursor);
-                if (!eventMap[dk]) eventMap[dk] = [];
-                eventMap[dk].push(ev);
+            end = ev.dtend ? parseUTC(ev.dtend) : startAt;
+            cursor = new Date(startAt);
+            // An all-day event's DTEND is exclusive; a single-day one has
+            // start == end, so always emit at least the first day.
+            do {
+                key = dateKey(cursor);
+                (map[key] = map[key] || []).push(ev);
                 cursor.setDate(cursor.getDate() + 1);
-            }
+            } while (cursor < end);
         } else {
-            var dk = dateKey(evStart);
-            if (!eventMap[dk]) eventMap[dk] = [];
-            eventMap[dk].push(ev);
+            key = dateKey(startAt);
+            (map[key] = map[key] || []).push(ev);
         }
     }
-
-    var totalCells = 42; // 6 rows × 7 days
-    var cellDate = new Date(year, month, 1 - startDow);
-
-    for (var c = 0; c < totalCells; c++) {
-        var cell = document.createElement('div');
-        cell.className = 'cal-day';
-
-        var cellMonth = cellDate.getMonth();
-        var cellDay = cellDate.getDate();
-        var isCurrentMonth = cellMonth === month;
-        var isToday = isSameDay(cellDate, today);
-        var dayOfWeek = cellDate.getDay();
-        var isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
-
-        if (!isCurrentMonth) cell.classList.add('other-month');
-        if (isToday) cell.classList.add('today');
-        if (isWeekend && isCurrentMonth) cell.classList.add('weekend');
-        if (state.selectedDate && isSameDay(cellDate, state.selectedDate)) {
-            cell.classList.add('selected');
-        }
-
-        // Day number
-        var numSpan = document.createElement('div');
-        numSpan.className = 'cal-day-number';
-        numSpan.textContent = cellDay;
-        cell.appendChild(numSpan);
-
-        // Events for this day
-        var dk = dateKey(cellDate);
-        var dayEvents = eventMap[dk] || [];
-
-        if (dayEvents.length > 0 && isCurrentMonth) {
-            if (state.viewMode === 'grid') {
-                // Show event items in cell
-                var evContainer = document.createElement('div');
-                evContainer.className = 'cal-day-events';
-                var maxShow = 3;
-                for (var ei = 0; ei < Math.min(dayEvents.length, maxShow); ei++) {
-                    var evItem = document.createElement('div');
-                    evItem.className = 'cal-event-item';
-                    evItem.style.background = dayEvents[ei].color + '30';
-                    evItem.style.borderLeft = '2px solid ' + (dayEvents[ei].color || 'var(--accent)');
-                    var timePrefix = dayEvents[ei].all_day ? 'GT ' : formatTime(dayEvents[ei].dtstart) + ' ';
-                    evItem.textContent = timePrefix + dayEvents[ei].summary;
-                    evItem.title = dayEvents[ei].summary;
-                    evContainer.appendChild(evItem);
-                }
-                if (dayEvents.length > maxShow) {
-                    var more = document.createElement('div');
-                    more.className = 'cal-event-more';
-                    more.textContent = '+' + (dayEvents.length - maxShow) + ' more';
-                    evContainer.appendChild(more);
-                }
-                cell.appendChild(evContainer);
-            }
-
-            // Always show dots at bottom
-            var dotsRow = document.createElement('div');
-            dotsRow.className = 'cal-day-dots';
-            var seenColors = {};
-            for (var di = 0; di < dayEvents.length; di++) {
-                var col = dayEvents[di].color || '#00d4aa';
-                if (!seenColors[col]) {
-                    seenColors[col] = true;
-                    var dot = document.createElement('div');
-                    dot.className = 'cal-dot';
-                    dot.style.background = col;
-                    dotsRow.appendChild(dot);
-                }
-            }
-            cell.appendChild(dotsRow);
-        }
-
-        // Click handler for selecting day
-        (function(d) {
-            cell.addEventListener('click', function() {
-                state.selectedDate = new Date(d);
-                renderCalendar();
-                scrollAgendaToDate(d);
-            });
-        })(new Date(cellDate));
-
-        grid.appendChild(cell);
-        cellDate.setDate(cellDate.getDate() + 1);
+    for (key in map) {
+        map[key].sort(function(a, b) {
+            if (a.all_day !== b.all_day) return a.all_day ? -1 : 1;
+            return String(a.dtstart).localeCompare(String(b.dtstart));
+        });
     }
+    state.eventIndex = map;
+    return map;
+}
+
+function eventsOn(d) { return (state.eventIndex || {})[dateKey(d)] || []; }
+
+/** The next event starting from now, across every enabled calendar. */
+function nextEvent() {
+    var now = new Date(), i, ev, at;
+    for (i = 0; i < state.events.length; i++) {
+        ev = state.events[i];
+        if (ev.all_day) continue;          // no meaningful start time
+        at = parseUTC(ev.dtstart);
+        if (at && at >= now) return ev;
+    }
+    return null;
 }
 
 // ===============================================================
-// AGENDA SIDEBAR
+// FAR — the clock, the next single thing, one actionable line
 // ===============================================================
-function renderAgenda() {
-    var list = $('agendaList');
-    list.innerHTML = '';
+function renderFar() {
+    var now = new Date();
+    $('farClock').textContent = fdate(fmt.time, now);
+    $('farDate').textContent =
+        fdate(fmt.weekdayLg, now) + ' · ' + fdate(fmt.dayMonth, now);
 
-    var today = new Date();
-    today.setHours(0, 0, 0, 0);
+    var host = $('farNext');
+    var ev = nextEvent();
+    if (!ev) {
+        // An empty screen is not a failure state here — it is the answer.
+        host.className = 'far-next empty';
+        host.textContent = 'Nichts mehr heute';
+        return;
+    }
+    host.className = 'far-next';
+    host.innerHTML = '';
 
-    // Group events by day for next 14 days
-    var groups = {};
-    var groupOrder = [];
+    var t = document.createElement('span');
+    t.className = 't';
+    t.textContent = fdate(fmt.time, parseUTC(ev.dtstart));
+    host.appendChild(t);
+
+    var body = document.createElement('span');
+    body.appendChild(document.createTextNode(ev.summary || 'Termin'));
+    if (ev.location) {
+        var loc = document.createElement('span');
+        loc.className = 'loc';
+        loc.textContent = ev.location;
+        body.appendChild(loc);
+    }
+    host.appendChild(body);
+}
+
+// ===============================================================
+// NEAR — the calendar, at arm's length
+// ===============================================================
+function renderNear() {
+    var now = new Date();
+    $('nearClock').textContent = fdate(fmt.time, now);
+    $('nearDate').textContent =
+        fdate(fmt.weekdaySm, now) + ' ' + fdate(fmt.dayMonthSm, now);
+
+    var view = state.settings.near_view || 'fortnight';
+    if (view === 'month') renderMonth(now);
+    else if (view === 'agenda') renderAgendaView(now);
+    else renderFortnight(now);
+
+    renderRail(now);
+}
+
+function dayCell(date, today, opts) {
+    var cell = document.createElement('div');
+    cell.className = 'day';
+    var dow = date.getDay();
+    if (dow === 0 || dow === 6) cell.className += ' we';
+    if (opts.out) cell.className += ' out';
+    if (isSameDay(date, today)) cell.className += ' today';
+
+    var dn = document.createElement('div');
+    dn.className = 'dn';
+    dn.appendChild(document.createTextNode(fdate(fmt.dayNum, date)));
+    if (opts.kw) {
+        var kw = document.createElement('em');
+        kw.textContent = 'KW ' + isoWeek(date);
+        dn.appendChild(kw);
+    }
+    cell.appendChild(dn);
+
+    if (opts.out) return cell;
+
+    var events = eventsOn(date), shown = 0, i;
+    for (i = 0; i < events.length && shown < opts.max; i++) {
+        cell.appendChild(eventLine(events[i], opts.detail));
+        shown++;
+    }
+    if (events.length > shown) {
+        var more = document.createElement('div');
+        more.className = 'more';
+        more.textContent = '+' + (events.length - shown);
+        cell.appendChild(more);
+    }
+    return cell;
+}
+
+function eventLine(ev, detail) {
+    var line = document.createElement('div');
+    line.className = 'ev' + (ev.all_day ? ' span' : '');
+    if (!ev.all_day) line.style.borderLeftColor = ev.color || 'var(--now)';
+
+    if (!ev.all_day) {
+        var t = document.createElement('span');
+        t.className = 't';
+        t.textContent = fdate(fmt.time, parseUTC(ev.dtstart)) + ' ';
+        line.appendChild(t);
+    }
+    line.appendChild(document.createTextNode(ev.summary || ''));
+
+    if (detail && ev.location) {
+        var s = document.createElement('span');
+        s.className = 's';
+        s.textContent = ev.location;
+        line.appendChild(s);
+    }
+    return line;
+}
+
+function renderDow() {
+    var host = $('calDow');
+    host.innerHTML = '';
+    var monday = startOfWeek(new Date()), i, span, d;
+    for (i = 0; i < 7; i++) {
+        d = new Date(monday); d.setDate(d.getDate() + i);
+        span = document.createElement('span');
+        span.textContent = fdate(fmt.weekdaySm, d);
+        if (i >= 5) span.className = 'we';
+        host.appendChild(span);
+    }
+}
+
+/** Two rows of seven from this week's Monday. The default: four times the
+ *  cell height of a month, so events are legible text rather than ticks. */
+function renderFortnight(today) {
+    var start = startOfWeek(today);
+    var grid = $('calGrid');
+    grid.className = 'cal-grid rows-2';
+    grid.innerHTML = '';
+    renderDow();
+
+    var end = new Date(start); end.setDate(end.getDate() + 13);
+    $('calTitle').textContent =
+        fdate(fmt.dayNum, start) + '. – ' + fdate(fmt.dayMonth, end);
 
     for (var i = 0; i < 14; i++) {
-        var d = new Date(today);
-        d.setDate(d.getDate() + i);
-        var dk = dateKey(d);
-        groups[dk] = { date: new Date(d), events: [] };
-        groupOrder.push(dk);
-    }
-
-    for (var e = 0; e < state.events.length; e++) {
-        var ev = state.events[e];
-        var evStart = parseUTC(ev.dtstart);
-        var evEnd = ev.dtend ? parseUTC(ev.dtend) : evStart;
-
-        if (ev.all_day) {
-            var cursor = new Date(evStart);
-            while (cursor < evEnd) {
-                var dk = dateKey(cursor);
-                if (groups[dk]) groups[dk].events.push(ev);
-                cursor.setDate(cursor.getDate() + 1);
-            }
-        } else {
-            var dk = dateKey(evStart);
-            if (groups[dk]) groups[dk].events.push(ev);
-        }
-    }
-
-    var hasAny = false;
-    for (var gi = 0; gi < groupOrder.length; gi++) {
-        var group = groups[groupOrder[gi]];
-        if (group.events.length === 0) continue;
-        hasAny = true;
-
-        var section = document.createElement('div');
-        section.className = 'agenda-day-group';
-        section.setAttribute('data-date', groupOrder[gi]);
-
-        var label = document.createElement('div');
-        label.className = 'agenda-day-label';
-        if (isSameDay(group.date, new Date())) {
-            label.classList.add('today-label');
-            label.textContent = 'Today — ' + formatDayLabel(group.date);
-        } else if (isSameDay(group.date, new Date(new Date().setDate(new Date().getDate()+1)))) {
-            label.textContent = 'Tomorrow — ' + formatDayLabel(group.date);
-        } else {
-            label.textContent = formatDayLabel(group.date);
-        }
-        section.appendChild(label);
-
-        // Sort events: all-day first, then by time
-        group.events.sort(function(a, b) {
-            if (a.all_day && !b.all_day) return -1;
-            if (!a.all_day && b.all_day) return 1;
-            return parseUTC(a.dtstart) - parseUTC(b.dtstart);
-        });
-
-        for (var ei = 0; ei < group.events.length; ei++) {
-            var ev = group.events[ei];
-            var item = document.createElement('div');
-            item.className = 'agenda-event';
-
-            var bar = document.createElement('div');
-            bar.className = 'agenda-event-bar';
-            bar.style.background = ev.color || 'var(--accent)';
-            item.appendChild(bar);
-
-            var content = document.createElement('div');
-            content.className = 'agenda-event-content';
-
-            var timeEl = document.createElement('div');
-            timeEl.className = 'agenda-event-time';
-            if (ev.all_day) {
-                timeEl.textContent = 'GT';
-            } else {
-                timeEl.textContent = formatTime(ev.dtstart) + (ev.dtend ? ' – ' + formatTime(ev.dtend) : '');
-            }
-            content.appendChild(timeEl);
-
-            var title = document.createElement('div');
-            title.className = 'agenda-event-title';
-            title.textContent = ev.summary || 'Untitled';
-            content.appendChild(title);
-
-            if (ev.location) {
-                var loc = document.createElement('div');
-                loc.className = 'agenda-event-location';
-                loc.textContent = '📍 ' + ev.location;
-                content.appendChild(loc);
-            }
-
-            item.appendChild(content);
-            section.appendChild(item);
-        }
-
-        list.appendChild(section);
-    }
-
-    if (!hasAny) {
-        list.innerHTML = '<div class="agenda-empty">No upcoming events in the next 14 days</div>';
+        var d = new Date(start); d.setDate(d.getDate() + i);
+        grid.appendChild(dayCell(d, today, { max: 6, detail: true, kw: (i % 7 === 0) }));
     }
 }
 
-function formatDayLabel(d) {
-    var days = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
-    var months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-    return days[d.getDay()] + ', ' + months[d.getMonth()] + ' ' + d.getDate();
-}
+/** Six rows of seven. More range, less room — better for a holiday block. */
+function renderMonth(today) {
+    var year = today.getFullYear(), month = today.getMonth();
+    var first = new Date(year, month, 1);
+    var start = startOfWeek(first);
+    var grid = $('calGrid');
+    grid.className = 'cal-grid rows-6';
+    grid.innerHTML = '';
+    renderDow();
+    $('calTitle').textContent = fdate(fmt.monthYear, first);
 
-function scrollAgendaToDate(d) {
-    var dk = dateKey(d);
-    var el = qs('[data-date="' + dk + '"]');
-    if (el) {
-        el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    for (var i = 0; i < 42; i++) {
+        var d = new Date(start); d.setDate(d.getDate() + i);
+        grid.appendChild(dayCell(d, today, {
+            max: 2, detail: false, out: d.getMonth() !== month
+        }));
     }
 }
+
+/** The original two-column list, kept for portrait mounts where seven
+ *  columns get too narrow to read. */
+function renderAgendaView(today) {
+    var grid = $('calGrid');
+    grid.className = 'cal-grid';
+    grid.style.gridTemplateColumns = '1fr';
+    grid.innerHTML = '';
+    $('calDow').innerHTML = '';
+    $('calTitle').textContent = fdate(fmt.monthYear, today);
+
+    var shown = 0;
+    for (var i = 0; i < 21 && shown < 14; i++) {
+        var d = new Date(today); d.setDate(d.getDate() + i);
+        var events = eventsOn(d);
+        if (!events.length) continue;
+        var block = document.createElement('div');
+        block.className = 'day' + (isSameDay(d, today) ? ' today' : '');
+        var dn = document.createElement('div');
+        dn.className = 'dn';
+        dn.textContent = fdate(fmt.weekdaySm, d) + ' ' + fdate(fmt.dayMonth, d);
+        block.appendChild(dn);
+        for (var j = 0; j < events.length; j++) block.appendChild(eventLine(events[j], true));
+        grid.appendChild(block);
+        shown++;
+    }
+}
+
+/** The rail is time-ordered actions, not a widget column: whatever happens
+ *  next, whichever source it came from. Departures and leave-times join it
+ *  as widgets land. */
+function renderRail(today) {
+    var host = $('railList');
+    host.innerHTML = '';
+
+    var rows = [], i, d, events, j, ev;
+    for (i = 0; i < 3 && rows.length < 6; i++) {
+        d = new Date(today); d.setDate(d.getDate() + i);
+        events = eventsOn(d);
+        for (j = 0; j < events.length && rows.length < 6; j++) {
+            ev = events[j];
+            if (i === 0 && !ev.all_day && parseUTC(ev.dtstart) < today) continue;
+            rows.push({ ev: ev, day: i });
+        }
+    }
+
+    if (!rows.length) {
+        var empty = document.createElement('div');
+        empty.className = 'empty';
+        empty.textContent = 'Nichts geplant';
+        host.appendChild(empty);
+        return;
+    }
+
+    for (i = 0; i < rows.length; i++) {
+        var r = document.createElement('div');
+        r.className = 'r';
+        var t = document.createElement('span');
+        t.className = 't' + (rows[i].day === 0 && i === 0 ? ' now' : '');
+        t.textContent = rows[i].ev.all_day
+            ? fdate(fmt.weekdaySm, new Date(today.getTime() + rows[i].day * 86400000))
+            : fdate(fmt.time, parseUTC(rows[i].ev.dtstart));
+        r.appendChild(t);
+
+        var body = document.createElement('span');
+        body.appendChild(document.createTextNode(rows[i].ev.summary || ''));
+        if (rows[i].day > 0) {
+            var s = document.createElement('span');
+            s.className = 's';
+            s.textContent = fdate(fmt.weekdaySm,
+                new Date(today.getTime() + rows[i].day * 86400000));
+            body.appendChild(s);
+        }
+        r.appendChild(body);
+        host.appendChild(r);
+    }
+}
+
+// ===============================================================
+// DENSITY
+//
+// Hysteresis is mandatory: without separate enter/exit thresholds the
+// layout oscillates while somebody stands at the boundary. The debounce
+// is on top of that, for the radar's own frame-to-frame jitter.
+// ===============================================================
+var densityPending = null;
+var densityPendingSince = 0;
+
+function densityActive() {
+    var mode = state.settings.density_mode || 'auto';
+    if (mode === 'off') return false;
+    if (mode === 'on') return true;
+    // auto: the usable FAR band is what makes this worth doing at all. With
+    // auto-off enabled the panel is only lit inside wake_distance, so the
+    // visible band is wake_distance - near_threshold. A 20 cm band is not a
+    // feature, it is a flicker.
+    if (!state.presence || state.presence.distance_cm === null ||
+        state.presence.distance_cm === undefined) return false;
+    var wake = num(state.settings.sensor_distance_max_cm, 300);
+    var near = num(state.settings.density_near_cm, 100);
+    var strategy = String(state.settings.display_off_strategy || 'hdmi');
+    // Under 'none' the panel never sleeps, so the whole sensor range is
+    // usable rather than just what is inside the wake distance.
+    var band = strategy.indexOf('none') >= 0 ? 600 - near : wake - near;
+    return band >= num(state.settings.density_min_band_cm, 80);
+}
+
+function num(v, dflt) {
+    var n = parseFloat(v);
+    return isNaN(n) ? dflt : n;
+}
+
+function updateDensity(distance) {
+    var app = $('app');
+    if (!densityActive()) {
+        // Without a distance source there is nothing to switch on. NEAR is
+        // the safe default: it is the layout that still makes sense when you
+        // are standing right in front of it, and gpio/none sensor modes never
+        // report a distance at all.
+        setDensity('near');
+        return;
+    }
+    if (distance === null || distance === undefined || distance <= 0) return;
+
+    var near = num(state.settings.density_near_cm, 100);
+    var far = num(state.settings.density_far_cm, 140);
+    var current = app.getAttribute('data-density');
+    var want = current;
+
+    if (current === 'far' && distance <= near) want = 'near';
+    else if (current === 'near' && distance >= far) want = 'far';
+
+    if (want === current) { densityPending = null; return; }
+
+    var nowMs = Date.now();
+    if (densityPending !== want) {
+        densityPending = want;
+        densityPendingSince = nowMs;
+        return;
+    }
+    if (nowMs - densityPendingSince >= num(state.settings.density_debounce_ms, 1500)) {
+        densityPending = null;
+        setDensity(want);
+    }
+}
+
+function setDensity(which) {
+    var app = $('app');
+    if (app.getAttribute('data-density') === which) return;
+    app.setAttribute('data-density', which);
+}
+
+// ===============================================================
+// RENDER ENTRY POINT
+// ===============================================================
+function renderWall() {
+    if (!fmt) buildFormatters();
+    buildEventIndex();
+    renderFar();
+    renderNear();
+}
+
+function updateClock() {
+    if (!fmt) buildFormatters();
+    var now = new Date();
+    $('farClock').textContent = fdate(fmt.time, now);
+    $('nearClock').textContent = fdate(fmt.time, now);
+    $('farDate').textContent =
+        fdate(fmt.weekdayLg, now) + ' · ' + fdate(fmt.dayMonth, now);
+    $('nearDate').textContent =
+        fdate(fmt.weekdaySm, now) + ' ' + fdate(fmt.dayMonthSm, now);
+}
+
 
 // ===============================================================
 // DATA FETCHING
 // ===============================================================
 function fetchEvents() {
-    $('syncDot').className = 'sync-dot polling';
-    $('syncText').textContent = 'Syncing...';
-
     apiGet('/events', function(err, data) {
         if (err) {
-            $('syncDot').className = 'sync-dot error';
-            $('syncText').textContent = 'Sync failed';
-
-            // Try localStorage fallback
+            // Never a spinner, never an error state. The Pi's WLAN drops and
+            // CalDAV times out; neither should be visible on a wall. Render
+            // the last good data and mark it quietly.
             var cached = localStorage.getItem('wallcal_events');
             if (cached) {
                 try {
                     var parsed = JSON.parse(cached);
                     state.events = parsed.events || [];
-                    renderCalendar();
-                    renderAgenda();
-                    $('syncText').textContent = 'Using cached data';
-                } catch(e) {}
+                    state.lastPoll = parsed.last_poll;
+                    renderWall();
+                } catch (e) {}
             }
+            markStale(true);
             return;
         }
 
         state.events = data.events || [];
         state.lastPoll = data.last_poll;
-
-        // Cache to localStorage
-        localStorage.setItem('wallcal_events', JSON.stringify(data));
-
-        $('syncDot').className = 'sync-dot';
-        updateSyncStatus();
-        renderCalendar();
-        renderAgenda();
+        try { localStorage.setItem('wallcal_events', JSON.stringify(data)); } catch (e) {}
+        markStale(false);
+        renderWall();
     });
+}
 
-    // Reset countdown
-    var interval = parseInt(state.settings.poll_interval_minutes || '5');
-    state.nextPollCountdown = interval * 60;
+/** Staleness is a dot, never a banner. */
+function markStale(stale) {
+    state.stale = !!stale;
+    $('app').setAttribute('data-stale', stale ? '1' : '0');
+}
+
+/** How old the cache is, in minutes — used to decide the dot on a slow feed
+ *  rather than only on an outright failure. */
+function cacheAgeMinutes() {
+    if (!state.lastPoll) return null;
+    var at = new Date(String(state.lastPoll).replace(' ', 'T') + 'Z');
+    if (isNaN(at.getTime())) return null;
+    return (Date.now() - at.getTime()) / 60000;
 }
 
 function fetchSettings() {
@@ -470,6 +624,8 @@ function fetchSettings() {
         // Apply view mode
         state.viewMode = data.calendar_view || 'grid';
         $('settingView').value = state.viewMode;
+
+        applyWallSettings(data);
 
         // Apply poll interval
         $('settingPollInterval').value = data.poll_interval_minutes || '5';
@@ -501,8 +657,25 @@ function fetchSettings() {
         toggleSensorFields();
         syncRangeLabels();
 
-        renderCalendar();
+        renderWall();
     });
+}
+
+/** Settings that change how the wall itself looks, applied without a reload
+ *  so the panel picks them up within the usual couple of seconds. */
+function applyWallSettings(data) {
+    var app = $('app');
+    app.setAttribute('data-drift', data.drift_enabled === 'false' ? 'off' : 'on');
+    app.style.setProperty('--crossfade', num(data.crossfade_ms, 400) + 'ms');
+
+    // Rebuild the Intl formatters only when the inputs actually change: they
+    // are expensive enough to matter on a Pi 3B+ and this runs on every poll.
+    var stamp = (data.locale || '') + '|' + (data.timezone || '');
+    if (stamp !== state.localeStamp) {
+        state.localeStamp = stamp;
+        buildFormatters();
+    }
+    if (state.eventIndex) renderWall();
 }
 
 function fetchCalendars() {
@@ -514,24 +687,16 @@ function fetchCalendars() {
 }
 
 function updateSyncStatus() {
-    if (state.lastPoll) {
-        var d = new Date(state.lastPoll);
-        var h = d.getHours();
-        var m = d.getMinutes();
-        var timeStr = (h < 10 ? '0' : '') + h + ':' + (m < 10 ? '0' : '') + m;
-        $('syncText').textContent = 'Last sync ' + timeStr;
-    }
+    // The poll interval is generous and the age dot covers the failure case,
+    // so a live "last sync" line is chrome. Kept as the staleness check.
+    var age = cacheAgeMinutes();
+    var limit = num(state.settings.poll_interval_minutes, 5) * 3;
+    if (age !== null) markStale(age > limit);
 }
 
 function updateCountdown() {
     state.nextPollCountdown--;
-    if (state.nextPollCountdown <= 0) {
-        fetchEvents();
-        return;
-    }
-    var mins = Math.floor(state.nextPollCountdown / 60);
-    var secs = state.nextPollCountdown % 60;
-    $('footerRight').textContent = 'Next sync in ' + mins + ':' + (secs < 10 ? '0' : '') + secs;
+    if (state.nextPollCountdown <= 0) fetchEvents();
 }
 
 // ===============================================================
@@ -764,15 +929,38 @@ function forceRepaint() {
 }
 
 function watchForWake() {
-    apiGet('/api/presence', function(err, data) {
-        if (err || !data || !data.daemon_running) return;
-        var on = data.display_on;
-        if (on === true && lastDisplayOn === false) {
-            forceRepaint();
-            fetchEvents();   // whoever walked up wants current data
+    apiGet('/api/presence/live', function(err, data) {
+        if (err || !data) return;
+        state.presence = data;
+
+        if (data.daemon_running) {
+            var on = data.display_on;
+            if (on === true && lastDisplayOn === false) {
+                forceRepaint();
+                fetchEvents();   // whoever walked up wants current data
+            }
+            if (on === true || on === false) lastDisplayOn = on;
+            applyPanelState(data);
         }
-        if (on === true || on === false) lastDisplayOn = on;
+        updateDensity(data.distance_cm);
     });
+}
+
+/** Reflect the daemon's published panel state: power, mode and the single
+ *  brightness value. Under the pwm strategy the hardware is already at that
+ *  level, so the overlay stays out of the way. */
+function applyPanelState(s) {
+    var app = $('app');
+    app.setAttribute('data-power', s.display_on === false ? 'off' : 'on');
+    app.setAttribute('data-mode', s.display_mode || 'normal');
+    app.setAttribute('data-brightness-source', s.brightness_source || 'css');
+
+    // A black scrim at alpha a leaves luminance (1 - a), so the perceptual
+    // value maps straight onto it.
+    var b = s.brightness;
+    if (typeof b === 'number') {
+        app.style.setProperty('--dim-alpha', String(Math.max(0, Math.min(1, 1 - b / 100))));
+    }
 }
 
 function startPresencePolling() {
@@ -987,49 +1175,20 @@ function init() {
         fetchEvents();
     }, 5 * 60 * 1000); // default 5 min, actual controlled by countdown
 
+    // Re-render on the minute so the fortnight rolls over at midnight without
+    // waiting for the next CalDAV poll.
+    setInterval(function() {
+        if (new Date().getSeconds() === 0) renderWall();
+    }, 1000);
+
     // Catch the display waking so the panel never shows a stale frame.
     watchForWake();
-    wakeWatchTimer = setInterval(watchForWake, 4000);
+    wakeWatchTimer = setInterval(watchForWake, 500);
 
-    // --- Navigation ---
-    $('prevMonth').addEventListener('click', function() {
-        state.viewMonth--;
-        if (state.viewMonth < 0) { state.viewMonth = 11; state.viewYear--; }
-        state.selectedDate = null;
-        renderCalendar();
-    });
-    $('nextMonth').addEventListener('click', function() {
-        state.viewMonth++;
-        if (state.viewMonth > 11) { state.viewMonth = 0; state.viewYear++; }
-        state.selectedDate = null;
-        renderCalendar();
-    });
-    $('todayBtn').addEventListener('click', function() {
-        var now = new Date();
-        state.viewYear = now.getFullYear();
-        state.viewMonth = now.getMonth();
-        state.selectedDate = now;
-        renderCalendar();
-        scrollAgendaToDate(now);
-    });
-
-    // --- Theme toggle ---
-    $('themeToggle').addEventListener('click', function() {
-        var current = document.body.getAttribute('data-theme');
-        var next = current === 'dark' ? 'light' : 'dark';
-        document.body.setAttribute('data-theme', next);
-        $('settingTheme').checked = (next === 'dark');
-        this.textContent = next === 'dark' ? '☀' : '🌙';
-        apiPost('/api/settings', { theme: next }, function() {});
-    });
-
-    // --- Refresh ---
-    $('refreshBtn').addEventListener('click', function() {
-        apiPost('/api/poll', {}, function(err) {
-            if (!err) showToast('Sync triggered', 'success');
-        });
-        setTimeout(fetchEvents, 2000);
-    });
+    // The wall has no touch panel and no pointer, so month navigation, the
+    // theme toggle and a manual refresh button were all chrome on a surface
+    // nobody can reach. Theme lives in settings; the poller refreshes itself.
+    // The only affordance left is the settings corner.
 
     // --- Settings modal ---
     $('settingsBtn').addEventListener('click', function() {
@@ -1230,7 +1389,7 @@ function init() {
                 document.body.setAttribute('data-theme', data.theme);
                 document.body.setAttribute('data-animations', data.animations_enabled === 'true' ? 'on' : 'off');
                 state.nextPollCountdown = parseInt(data.poll_interval_minutes) * 60;
-                renderCalendar();
+                renderWall();
             }
         });
     });
@@ -1380,7 +1539,6 @@ function init() {
     $('settingTheme').addEventListener('change', function() {
         var theme = this.checked ? 'dark' : 'light';
         document.body.setAttribute('data-theme', theme);
-        $('themeToggle').textContent = theme === 'dark' ? '☀' : '🌙';
     });
 
     // --- Keep the panel awake while somebody is actually using it ---
@@ -1399,7 +1557,7 @@ function init() {
     }
 
     // Initial render
-    renderCalendar();
+    renderWall();
 }
 
 function clearAddForm() {

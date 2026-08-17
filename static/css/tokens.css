@@ -1,99 +1,130 @@
-/* Extracted verbatim from templates/calendar.html. No rules changed. */
-
 /* ================================================================
-   CSS CUSTOM PROPERTIES — THEME SYSTEM
+   WallCal design tokens
+
+   The wall display is a typographic object read at 0.5 m and at 4 m with
+   no interaction in between, so the type scale between the two densities
+   is the design rather than a side effect of it. Two ladders, ~2.6x apart.
+
+   Teal was previously --accent, --success and --today-border all at once,
+   which meant it carried three meanings and nothing could be emphasised
+   because everything already was. It now means exactly one thing: the
+   next thing that happens.
    ================================================================ */
+
 :root {
-    /* Dark theme (default) */
-    --bg-primary: #0a0a0f;
-    --bg-secondary: #111119;
-    --bg-card: #16161f;
-    --bg-card-hover: #1c1c28;
-    --bg-input: #1e1e2a;
-    --bg-modal: #12121aee;
-    --border-color: #2a2a3a;
-    --border-subtle: #1f1f2f;
-    --text-primary: #e8e8f0;
-    --text-secondary: #9090a8;
-    --text-muted: #606078;
-    --accent: #00d4aa;
-    --accent-dim: #00d4aa33;
-    --accent-hover: #00eebb;
-    --today-bg: #00d4aa18;
-    --today-border: #00d4aa;
-    --weekend-bg: #0d0d15;
-    --event-dot-size: 6px;
-    --danger: #ff4466;
-    --danger-dim: #ff446633;
-    --warning: #ffaa22;
-    --success: #00d4aa;
-    --shadow: 0 2px 12px rgba(0,0,0,0.4);
-    --shadow-lg: 0 8px 32px rgba(0,0,0,0.6);
+    /* --- Wall palette. Dark by default: the dim overlay works far better
+           over dark content, and this panel is lit in a dark room. --- */
+    --ink:        #07070B;   /* ground — lower than the old #0a0a0f */
+    --ink-raised: #12131A;   /* the only raised surface */
+    --type-hi:    #F2F3F7;   /* near-white; pure white blooms at 4 m */
+    --type-lo:    #7E8598;   /* ~4.6:1 on ink, so it survives dimming */
+    --now:        #00D4AA;   /* retained identity — now/next, nothing else */
+    --alert:      #FF9E4A;   /* a deadline within the hour. Never red. */
+
+    /* Service surface only. The wall display has no cards. */
+    --surface:    #191B23;
+    --danger:     #FF4466;
+
+    /* --- Type --- */
+    --font: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI',
+            'Noto Sans', 'DejaVu Sans', Roboto, Cantarell, sans-serif;
+    --mono: ui-monospace, 'SF Mono', 'DejaVu Sans Mono', Menlo, Consolas, monospace;
+
+    /* FAR — read across the room. */
+    --far-clock: clamp(140px, 15.6vw, 320px);
+    --far-title: clamp(34px,   4.0vw,  82px);
+    --far-body:  clamp(20px,   2.3vw,  48px);
+    --far-label: clamp(13px,   1.25vw, 26px);
+
+    /* NEAR — read at arm's length. ~2.6x smaller; that ratio is the design. */
+    --near-clock: clamp(34px, 3.40vw, 70px);
+    --near-title: clamp(17px, 1.55vw, 32px);
+    --near-body:  clamp(13px, 1.15vw, 24px);
+    --near-meta:  clamp(11px, 0.90vw, 19px);
+    --near-label: clamp(10px, 0.78vw, 16px);
+
+    /* --- Motion. Only three things move, and none of them decoratively. --- */
+    --crossfade: 400ms;
+    --ramp: 800ms;
+
     --radius: 10px;
     --radius-sm: 6px;
     --transition: 0.2s ease;
+
+    /* --- Legacy aliases -------------------------------------------------
+       The settings modal still styles against the old names. Mapping them
+       here means it picks up the new palette without a second rewrite, and
+       they disappear when settings moves to its own page. */
+    --bg-primary: var(--ink);
+    --bg-secondary: var(--ink-raised);
+    --bg-card: var(--surface);
+    --bg-card-hover: #1F222C;
+    --bg-input: #1E1E2A;
+    --bg-modal: #12131Aee;
+    --border-color: #2A2E3A;
+    --border-subtle: #1F222C;
+    --text-primary: var(--type-hi);
+    --text-secondary: #9AA2B5;
+    --text-muted: var(--type-lo);
+    --accent: var(--now);
+    --accent-dim: #00D4AA33;
+    --accent-hover: #00EEBB;
+    --today-bg: #00D4AA18;
+    --today-border: var(--now);
+    --weekend-bg: #0C0D12;
+    --event-dot-size: 6px;
+    --danger-dim: #FF446633;
+    --warning: var(--alert);
+    --success: var(--now);
+    --shadow: 0 2px 12px rgba(0,0,0,0.4);
+    --shadow-lg: 0 8px 32px rgba(0,0,0,0.6);
 }
 
+/* The light theme is the service surface's; the wall stays dark. Keeping it
+   means the settings page is readable on a phone in daylight. */
 [data-theme="light"] {
-    --bg-primary: #f0f0f5;
-    --bg-secondary: #e8e8f0;
-    --bg-card: #ffffff;
-    --bg-card-hover: #f5f5fa;
-    --bg-input: #f0f0f5;
-    --bg-modal: #ffffffee;
-    --border-color: #d0d0dd;
-    --border-subtle: #e0e0ea;
-    --text-primary: #1a1a2e;
+    --ink: #F0F0F5;
+    --ink-raised: #FFFFFF;
+    --type-hi: #14161D;
+    --type-lo: #565D71;
+    --surface: #FFFFFF;
+    --now: #00A88A;
+    --bg-card-hover: #F5F5FA;
+    --bg-input: #F0F0F5;
+    --bg-modal: #FFFFFFEE;
+    --border-color: #D0D0DD;
+    --border-subtle: #E0E0EA;
     --text-secondary: #555570;
-    --text-muted: #888898;
-    --accent: #00a88a;
-    --accent-dim: #00a88a22;
-    --accent-hover: #00c4a0;
-    --today-bg: #00a88a15;
-    --today-border: #00a88a;
-    --weekend-bg: #f5f5fa;
+    --accent-dim: #00A88A22;
+    --accent-hover: #00C4A0;
+    --today-bg: #00A88A15;
+    --weekend-bg: #F5F5FA;
     --shadow: 0 2px 12px rgba(0,0,0,0.08);
     --shadow-lg: 0 8px 32px rgba(0,0,0,0.12);
 }
 
-/* ================================================================
-   ANIMATIONS (togglable via data-animations="off")
-   ================================================================ */
-@keyframes fadeIn {
-    from { opacity: 0; transform: translateY(8px); }
-    to { opacity: 1; transform: translateY(0); }
-}
-@keyframes pulse {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.6; }
-}
-@keyframes slideIn {
-    from { opacity: 0; transform: translateX(20px); }
-    to { opacity: 1; transform: translateX(0); }
-}
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
 
-[data-animations="on"] .animate-fade {
-    animation: fadeIn 0.3s ease;
-}
-[data-animations="on"] .animate-slide {
-    animation: slideIn 0.3s ease;
-}
-
-/* ================================================================
-   RESET + BASE
-   ================================================================ */
-*, *::before, *::after {
-    margin: 0; padding: 0; box-sizing: border-box;
-}
 html, body {
     height: 100%;
     overflow: hidden;
-    /* Local fonts first — 'Inter' is an optional upgrade, not a
-       dependency. DejaVu and Noto both ship with Raspberry Pi OS. */
-    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI',
-                 'Noto Sans', 'DejaVu Sans', Roboto, Cantarell,
-                 'Helvetica Neue', Arial, sans-serif;
-    background: var(--bg-primary);
-    color: var(--text-primary);
+    font-family: var(--font);
+    background: var(--ink);
+    color: var(--type-hi);
     -webkit-font-smoothing: antialiased;
+    /* Digits stop jittering on the minute. This is most of what makes Inter
+       usable as a clock face at 300px. */
+    font-variant-numeric: tabular-nums;
+}
+
+:focus-visible { outline: 2px solid var(--now); outline-offset: 2px; }
+
+/* Honoured on the wall too: the drift and the crossfades are motion someone
+   sensitive to it would be exposed to for months at a time. */
+@media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+        animation-duration: 0.001ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.001ms !important;
+    }
 }

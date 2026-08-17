@@ -99,5 +99,27 @@ DEFAULT_KIOSK_GPU = "auto"            # auto | on | off
 # --- UI defaults ---
 DEFAULT_THEME = "dark"                # "dark" or "light"
 DEFAULT_ANIMATIONS_ENABLED = False    # performance first
-DEFAULT_CALENDAR_VIEW = "grid"        # "grid" (squares) or "list"
-DEFAULT_LOCALE = "en"
+DEFAULT_CALENDAR_VIEW = "grid"        # legacy; migrated into near_view
+DEFAULT_LOCALE = "de-DE"
+DEFAULT_TIMEZONE = "auto"             # "auto" = whatever the browser resolves
+
+# What the NEAR layout shows. fortnight is the default because two rows of
+# seven give roughly four times the cell height of a month, so events read as
+# legible text rather than ticks you have to walk closer to decode.
+DEFAULT_NEAR_VIEW = "fortnight"       # fortnight | month | agenda
+
+# --- Adaptive content density ---
+# "auto" enables it only when the usable FAR band — wake distance minus the
+# NEAR threshold — is wide enough to be worth switching across. A 20 cm band
+# is not a feature, it is a flicker.
+DEFAULT_DENSITY_MODE = "auto"         # off | on | auto
+DEFAULT_DENSITY_NEAR_CM = 100         # closer than this -> NEAR
+DEFAULT_DENSITY_FAR_CM = 140          # further than this -> back to FAR
+DEFAULT_DENSITY_MIN_BAND_CM = 80      # narrower than this and auto declines
+DEFAULT_DENSITY_DEBOUNCE_MS = 1500
+DEFAULT_CROSSFADE_MS = 400
+
+# --- Burn-in drift ---
+# IPS laptop panels retain a static clock position over months. Cheap
+# insurance whenever the panel is lit, so it defaults on in every mode.
+DEFAULT_DRIFT_ENABLED = True

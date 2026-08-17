@@ -246,6 +246,25 @@ def _m1_sensor_gpio_pin(conn, fresh):
                 _LEGACY_SENSOR_GPIO_PIN)
 
 
+@migration(3, "fold calendar_view into near_view; keep English for upgrades")
+def _m3_near_view(conn, fresh):
+    """The wall gained two density layouts, so the old view flag became a
+    three-way choice. grid was a month, list was the agenda list.
+
+    Locale is migrated in the same pass: it defaulted to "en" and now
+    defaults to de-DE, which would silently relabel an existing wall.
+    """
+    if fresh:
+        return
+    if not _has_setting(conn, "near_view"):
+        row = conn.execute(
+            "SELECT value FROM settings WHERE key = 'calendar_view'").fetchone()
+        old = str(row["value"]).strip().lower() if row else "grid"
+        _put_setting(conn, "near_view", "agenda" if old == "list" else "month")
+    if not _has_setting(conn, "locale"):
+        _put_setting(conn, "locale", "en")
+
+
 @migration(2, "fold schedule_enabled into night_mode")
 def _m2_night_mode(conn, fresh):
     """Quiet hours grew a third option, so the boolean became a mode.
@@ -274,6 +293,15 @@ _SETTINGS_DEFAULTS = {
     "animations_enabled": str(config.DEFAULT_ANIMATIONS_ENABLED).lower(),
     "calendar_view": config.DEFAULT_CALENDAR_VIEW,
     "locale": config.DEFAULT_LOCALE,
+    "timezone": config.DEFAULT_TIMEZONE,
+    "near_view": config.DEFAULT_NEAR_VIEW,
+    "density_mode": config.DEFAULT_DENSITY_MODE,
+    "density_near_cm": str(config.DEFAULT_DENSITY_NEAR_CM),
+    "density_far_cm": str(config.DEFAULT_DENSITY_FAR_CM),
+    "density_min_band_cm": str(config.DEFAULT_DENSITY_MIN_BAND_CM),
+    "density_debounce_ms": str(config.DEFAULT_DENSITY_DEBOUNCE_MS),
+    "crossfade_ms": str(config.DEFAULT_CROSSFADE_MS),
+    "drift_enabled": str(config.DEFAULT_DRIFT_ENABLED).lower(),
     # Sensor
     "sensor_mode": config.DEFAULT_SENSOR_MODE,
     "sensor_gpio_pin": str(config.DEFAULT_SENSOR_GPIO_PIN),

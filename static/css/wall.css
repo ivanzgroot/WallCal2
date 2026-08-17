@@ -1,351 +1,284 @@
-/* Extracted verbatim from templates/calendar.html. No rules changed. */
+/* ================================================================
+   The wall display.
+
+   No borders, no card outlines, no chrome. Grouping is done with spacing
+   and weight alone — empty space is what makes a wall display look
+   designed rather than assembled.
+
+   Both density layers stay rendered and current in the DOM. Switching
+   between them is opacity and transform only: never a re-fetch, never a
+   reflow that could flash.
+   ================================================================ */
+
+#app {
+    position: fixed;
+    inset: 0;
+    background: var(--ink);
+    overflow: hidden;
+}
+
+/* --- Burn-in drift -------------------------------------------------------
+   IPS laptop panels retain a static clock position over months. The whole
+   layout moves as a group, so the clock's relationship to everything around
+   it is fixed while its absolute position is not. Cheap insurance whenever
+   the panel is lit, which is why it defaults on in every mode. */
+#drift {
+    position: absolute;
+    inset: 0;
+    will-change: transform;
+}
+@keyframes wc-drift {
+      0% { transform: translate(0, 0); }
+     25% { transform: translate(2px, 1px); }
+     50% { transform: translate(3px, 3px); }
+     75% { transform: translate(1px, 3px); }
+    100% { transform: translate(0, 0); }
+}
+#app[data-drift="on"] #drift { animation: wc-drift 480s ease-in-out infinite; }
+
+/* --- Brightness ----------------------------------------------------------
+   The single perceptual value from the daemon. Under the pwm strategy the
+   hardware is already at this level and the overlay stays clear; under
+   hdmi/css/none there is no hardware lever, so this is the lever. */
+#dim {
+    position: fixed;
+    inset: 0;
+    background: #000;
+    pointer-events: none;
+    z-index: 60;
+    opacity: 0;
+    transition: opacity var(--ramp) ease;
+}
+#app[data-brightness-source="css"] #dim { opacity: var(--dim-alpha, 0); }
+#app[data-power="off"] #dim { opacity: 1; }
+
+/* --- Density layers --- */
+.layer {
+    position: absolute;
+    inset: 0;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity var(--crossfade) ease;
+    display: flex;
+    flex-direction: column;
+}
+#app[data-density="far"]  #far  { opacity: 1; }
+#app[data-density="near"] #near { opacity: 1; }
+
+/* The night clock is FAR with everything but the time removed. */
+#app[data-mode="night"] #far .far-next,
+#app[data-mode="night"] #far .far-wx,
+#app[data-mode="night"] #far .far-bin { display: none; }
+
+.label {
+    font-size: var(--far-label);
+    font-weight: 600;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--type-lo);
+}
 
 /* ================================================================
-   LAYOUT — full 1920×1080 optimized
+   FAR — large clock, the next single thing, one actionable line
    ================================================================ */
-#app {
-    display: flex;
-    flex-direction: column;
-    height: 100vh;
-    max-height: 100vh;
+
+#far { padding: 5.5vh 5vw; }
+
+.far-clock {
+    /* Weight 200 is a burn-in decision as much as a typographic one:
+       retention scales with luminance x dwell, and this is the largest and
+       longest-lived element on the panel. */
+    font-size: var(--far-clock);
+    font-weight: 200;
+    line-height: 0.92;
+    letter-spacing: -0.03em;
+    margin: 2vh 0 auto;
 }
 
-/* --- Header --- */
-.header {
+.far-next {
     display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 12px 28px;
-    background: var(--bg-secondary);
-    border-bottom: 1px solid var(--border-subtle);
-    flex-shrink: 0;
-    min-height: 56px;
-}
-.header-left {
-    display: flex;
-    align-items: center;
-    gap: 16px;
-}
-.header-clock {
-    font-size: 28px;
-    font-weight: 700;
-    letter-spacing: -0.5px;
-    color: var(--text-primary);
-}
-.header-date {
-    font-size: 16px;
+    gap: 2vw;
+    font-size: var(--far-title);
     font-weight: 400;
-    color: var(--text-secondary);
+    line-height: 1.2;
 }
-.header-right {
-    display: flex;
-    align-items: center;
-    gap: 12px;
+.far-next .t { color: var(--now); flex: none; }
+.far-next .loc {
+    display: block;
+    font-size: var(--far-body);
+    color: var(--type-lo);
+    margin-top: 0.6vh;
 }
-.sync-status {
-    font-size: 12px;
-    color: var(--text-muted);
-    display: flex;
-    align-items: center;
-    gap: 6px;
-}
-.sync-dot {
-    width: 7px; height: 7px;
-    border-radius: 50%;
-    background: var(--accent);
-    display: inline-block;
-}
-.sync-dot.error { background: var(--danger); }
-.sync-dot.polling { animation: pulse 1s infinite; }
+.far-next .go { display: block; font-size: var(--far-body); color: var(--alert); margin-top: 0.4vh; }
+.far-next.empty { color: var(--type-lo); font-size: var(--far-body); }
 
-.btn-icon {
-    width: 38px; height: 38px;
-    border-radius: var(--radius-sm);
-    border: 1px solid var(--border-color);
-    background: var(--bg-card);
-    color: var(--text-secondary);
-    cursor: pointer;
+.far-wx { font-size: var(--far-body); margin-top: 2.6vh; }
+.far-wx .sub { color: var(--type-lo); }
+
+.far-bin {
+    position: absolute;
+    right: 5vw;
+    bottom: 5.5vh;
     display: flex;
     align-items: center;
-    justify-content: center;
-    font-size: 18px;
-    transition: background var(--transition), color var(--transition);
+    gap: 1vw;
+    font-size: var(--far-body);
 }
-.btn-icon:hover {
-    background: var(--bg-card-hover);
-    color: var(--text-primary);
-}
+.far-bin i { width: 0.5vw; height: 3.4vh; border-radius: 1px; display: block; }
 
-/* --- Main content --- */
-.main {
-    display: flex;
-    flex: 1;
-    overflow: hidden;
-}
+/* ================================================================
+   NEAR — everything from FAR compressed into a bar, then the calendar
+   ================================================================ */
 
-/* --- Calendar grid panel --- */
-.calendar-panel {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    padding: 20px 24px;
-    overflow: hidden;
-}
-.cal-nav {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    margin-bottom: 16px;
-    flex-shrink: 0;
-}
-.cal-nav-title {
-    font-size: 24px;
-    font-weight: 600;
-}
-.cal-nav-buttons {
-    display: flex;
-    gap: 6px;
-}
-.cal-nav-btn {
-    width: 36px; height: 36px;
-    border-radius: var(--radius-sm);
-    border: 1px solid var(--border-color);
-    background: var(--bg-card);
-    color: var(--text-secondary);
-    cursor: pointer;
-    font-size: 16px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    transition: background var(--transition);
-}
-.cal-nav-btn:hover { background: var(--bg-card-hover); color: var(--text-primary); }
-.cal-nav-btn.today-btn {
-    width: auto;
-    padding: 0 14px;
-    font-size: 13px;
-    font-weight: 500;
-}
+#near { padding: 2.6vh 2.4vw; gap: 2vh; }
 
-/* Day-of-week header */
-.cal-dow {
+.near-bar {
+    display: flex;
+    align-items: baseline;
+    gap: 2.2vw;
+    font-size: var(--near-body);
+    color: var(--type-lo);
+    flex: none;
+}
+.near-bar .near-clock {
+    font-size: var(--near-clock);
+    font-weight: 200;
+    color: var(--type-hi);
+    letter-spacing: -0.02em;
+    line-height: 1;
+}
+.near-bar .near-date { font-size: var(--near-title); color: var(--type-hi); }
+.near-bar .spacer { margin-left: auto; }
+
+.near-body {
     display: grid;
-    grid-template-columns: repeat(7, 1fr);
-    gap: 4px;
-    margin-bottom: 4px;
-    flex-shrink: 0;
-}
-.cal-dow span {
-    text-align: center;
-    font-size: 12px;
-    font-weight: 600;
-    color: var(--text-muted);
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-    padding: 6px 0;
-}
-
-/* Day grid */
-.cal-grid {
-    display: grid;
-    grid-template-columns: repeat(7, 1fr);
-    grid-template-rows: repeat(6, 1fr);
-    gap: 4px;
+    grid-template-columns: 1fr 21vw;
+    gap: 2.4vw;
     flex: 1;
     min-height: 0;
 }
-.cal-day {
-    background: var(--bg-card);
-    border-radius: var(--radius-sm);
-    border: 1px solid var(--border-subtle);
-    padding: 6px 8px;
-    cursor: pointer;
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
-    transition: background var(--transition), border-color var(--transition);
-    position: relative;
-}
-.cal-day:hover {
-    background: var(--bg-card-hover);
-    border-color: var(--border-color);
-}
-.cal-day.other-month {
-    opacity: 0.3;
-}
-.cal-day.today {
-    background: var(--today-bg);
-    border-color: var(--today-border);
-}
-.cal-day.selected {
-    border-color: var(--accent);
-    box-shadow: 0 0 0 1px var(--accent-dim);
-}
-.cal-day.weekend {
-    background: var(--weekend-bg);
-}
-.cal-day.today.weekend {
-    background: var(--today-bg);
-}
-.cal-day-number {
-    font-size: 15px;
-    font-weight: 600;
-    margin-bottom: 4px;
-    color: var(--text-primary);
-}
-.cal-day.other-month .cal-day-number {
-    color: var(--text-muted);
-}
-.cal-day.today .cal-day-number {
-    color: var(--accent);
-}
 
-/* Event items inside day cells */
-.cal-day-events {
-    flex: 1;
-    overflow: hidden;
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
+.cal { display: flex; flex-direction: column; min-height: 0; }
+.cal-title { font-size: var(--near-label); font-weight: 600; letter-spacing: 0.2em;
+             text-transform: uppercase; color: var(--type-lo); margin-bottom: 1.2vh; }
+
+.cal-dow { display: grid; grid-template-columns: repeat(7, 1fr); gap: 0.4vw;
+           margin-bottom: 0.7vh; flex: none; }
+.cal-dow span {
+    font-size: var(--near-label);
+    font-weight: 600;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--type-lo);
+    padding-left: 0.4vw;
 }
-.cal-event-item {
-    font-size: 11px;
-    line-height: 1.3;
-    padding: 2px 5px;
+.cal-dow span.we { color: #575D6D; }
+
+.cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 0.4vw;
+            flex: 1; min-height: 0; }
+.cal-grid.rows-2 { grid-template-rows: repeat(2, 1fr); }
+.cal-grid.rows-6 { grid-template-rows: repeat(6, 1fr); }
+
+.day {
     border-radius: 3px;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    color: var(--text-primary);
-    font-weight: 400;
-}
-.cal-event-more {
-    font-size: 10px;
-    color: var(--text-muted);
-    padding: 1px 5px;
-    font-weight: 500;
-}
-
-/* Event dots row (shown at bottom of cell) */
-.cal-day-dots {
-    display: flex;
-    gap: 3px;
-    margin-top: auto;
-    padding-top: 3px;
-    flex-wrap: wrap;
-}
-.cal-dot {
-    width: var(--event-dot-size);
-    height: var(--event-dot-size);
-    border-radius: 50%;
-    flex-shrink: 0;
-}
-
-/* --- Agenda sidebar --- */
-.agenda-panel {
-    width: 380px;
-    flex-shrink: 0;
-    background: var(--bg-secondary);
-    border-left: 1px solid var(--border-subtle);
+    padding: 0.55vh 0.4vw;
+    min-width: 0;
     display: flex;
     flex-direction: column;
     overflow: hidden;
 }
-.agenda-header {
-    padding: 20px 20px 12px;
-    flex-shrink: 0;
-}
-.agenda-title {
-    font-size: 18px;
-    font-weight: 600;
-    margin-bottom: 4px;
-}
-.agenda-subtitle {
-    font-size: 12px;
-    color: var(--text-muted);
-}
-.agenda-list {
-    flex: 1;
-    overflow-y: auto;
-    padding: 0 20px 20px;
-}
-.agenda-day-group {
-    margin-bottom: 20px;
-}
-.agenda-day-label {
-    font-size: 13px;
-    font-weight: 600;
-    color: var(--text-secondary);
-    margin-bottom: 8px;
-    padding-bottom: 6px;
-    border-bottom: 1px solid var(--border-subtle);
-    position: sticky;
-    top: 0;
-    background: var(--bg-secondary);
-    z-index: 1;
-}
-.agenda-day-label.today-label {
-    color: var(--accent);
-    border-color: var(--accent-dim);
-}
-.agenda-event {
-    display: flex;
-    gap: 10px;
-    padding: 8px 10px;
-    border-radius: var(--radius-sm);
-    margin-bottom: 4px;
-    transition: background var(--transition);
-}
-.agenda-event:hover {
-    background: var(--bg-card-hover);
-}
-.agenda-event-bar {
-    width: 3px;
-    border-radius: 2px;
-    flex-shrink: 0;
-}
-.agenda-event-content {
-    flex: 1;
-    min-width: 0;
-}
-.agenda-event-time {
-    font-size: 12px;
-    color: var(--text-muted);
-    font-weight: 500;
-    margin-bottom: 2px;
-}
-.agenda-event-title {
-    font-size: 14px;
-    font-weight: 500;
-    color: var(--text-primary);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-}
-.agenda-event-location {
-    font-size: 11px;
-    color: var(--text-muted);
-    margin-top: 2px;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-}
-.agenda-empty {
-    color: var(--text-muted);
-    font-size: 14px;
-    text-align: center;
-    padding: 40px 20px;
-}
+.day.we    { background: var(--weekend-bg); }
+.day.out   { opacity: 0.28; }
+.day.today { background: var(--today-bg); box-shadow: inset 2px 0 0 var(--now); }
 
-/* --- Footer --- */
-.footer {
+.dn {
+    font-size: var(--near-title);
+    font-weight: 400;
+    line-height: 1;
+    margin-bottom: 0.5vh;
     display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 8px 28px;
-    background: var(--bg-secondary);
-    border-top: 1px solid var(--border-subtle);
-    flex-shrink: 0;
-    font-size: 11px;
-    color: var(--text-muted);
+    align-items: baseline;
+    gap: 0.4vw;
+}
+.day.today .dn { color: var(--now); font-weight: 600; }
+.dn em {
+    font-style: normal;
+    font-size: var(--near-label);
+    font-weight: 600;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--type-lo);
+}
+.dn .fr { width: 0.25vw; height: 1.2vh; border-radius: 1px; margin-left: auto; flex: none; }
+
+/* Calendar colour as a rule, not a filled box: the colour is data — it is
+   how you tell sources apart — but the tinted card behind it was chrome. */
+.ev {
+    font-size: var(--near-body);
+    line-height: 1.25;
+    padding-left: 0.4vw;
+    border-left: 2px solid var(--now);
+    margin-bottom: 0.4vh;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.ev .t { color: var(--type-lo); }
+.ev .s { display: block; font-size: var(--near-meta); color: var(--type-lo); margin-top: 0.15vh; }
+.ev .s.go { color: var(--alert); }
+.ev.span { border-left: none; background: #00D4AA24; border-radius: 2px; padding: 0.1vh 0.4vw; }
+.cal-grid.rows-2 .ev { white-space: normal; margin-bottom: 0.6vh; }
+.more { font-size: var(--near-meta); color: var(--type-lo); padding-left: 0.4vw; }
+
+/* --- The rail: time-ordered actions, not a widget column ---------------- */
+.rail { display: flex; flex-direction: column; min-height: 0; }
+.rail-k {
+    font-size: var(--near-label);
+    font-weight: 600;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    color: var(--type-lo);
+    margin-bottom: 1.2vh;
+}
+.rail-k.n { margin-top: 2.4vh; }
+.rail .r { display: flex; gap: 0.9vw; margin-bottom: 1.2vh;
+           font-size: var(--near-body); line-height: 1.3; }
+.rail .r .t { color: var(--type-lo); flex: none; min-width: 4.4vw; }
+.rail .r .t.now { color: var(--now); }
+.rail .r .s { display: block; font-size: var(--near-meta); color: var(--type-lo); margin-top: 0.2vh; }
+.rail .r .s.go { color: var(--alert); }
+.rail .empty { font-size: var(--near-body); color: var(--type-lo); }
+.rail-foot { margin-top: auto; display: flex; align-items: flex-end; gap: 0.8vw; }
+
+/* --- Staleness: a dot, never a banner ---------------------------------- */
+.stale {
+    width: 0.45vw; height: 0.45vw;
+    min-width: 5px; min-height: 5px;
+    border-radius: 50%;
+    background: var(--type-lo);
+    opacity: 0.5;
+    display: none;
+}
+#app[data-stale="1"] .stale { display: block; }
+
+/* --- Settings entry. No touch panel, so this stays nearly invisible. --- */
+#settingsBtn {
+    position: fixed;
+    right: 0; bottom: 0;
+    width: 64px; height: 64px;
+    background: none; border: none;
+    color: var(--type-lo);
+    opacity: 0.18;
+    font-size: 20px;
+    cursor: pointer;
+    z-index: 40;
+    transition: opacity var(--transition);
+}
+#settingsBtn:hover, #settingsBtn:focus-visible { opacity: 0.8; }
+
+/* Portrait wall mounts: seven columns get too narrow to read, so the
+   fortnight collapses to a single scrollable column of days. */
+@media (max-aspect-ratio: 1/1) {
+    .near-body { grid-template-columns: 1fr; }
+    .rail { display: none; }
 }
