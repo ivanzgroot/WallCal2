@@ -53,6 +53,93 @@ body.settings {
 }
 .jumper a.on { background: var(--now); color: #06131022; color: #04120F; border-color: var(--now); font-weight: 600; }
 
+/* ================================================================
+   SETUP STATUS
+
+   The first thing anyone needs is a sense of what already works and what
+   still wants them. Without it, sixty controls all look equally urgent.
+   ================================================================ */
+.setup {
+    background: var(--surface);
+    border-radius: var(--radius);
+    padding: 4px 0;
+    margin-bottom: 14px;
+    overflow: hidden;
+}
+.setup.first-run { background: linear-gradient(180deg, #16211E, #12181A); }
+.setup .intro { padding: 18px 16px 6px; }
+.setup .intro b { display: block; font-size: 17px; margin-bottom: 4px; }
+.setup .intro span { font-size: 14px; color: var(--type-lo); line-height: 1.5; }
+
+.setup a.step {
+    display: flex; align-items: center; gap: 12px;
+    padding: 13px 16px;
+    color: inherit; text-decoration: none;
+    border-top: 1px solid var(--border-subtle);
+    min-height: 44px;
+}
+.setup a.step:first-of-type { border-top: none; }
+.setup .tick {
+    width: 20px; height: 20px; border-radius: 50%;
+    border: 1.5px solid var(--border-color);
+    flex: none; position: relative;
+}
+.setup .done .tick { background: var(--now); border-color: var(--now); }
+.setup .done .tick::after {
+    content: ""; position: absolute; left: 6px; top: 2.5px;
+    width: 5px; height: 10px; border: solid #04120F;
+    border-width: 0 2px 2px 0; transform: rotate(42deg);
+}
+.setup .label { flex: 1; font-size: 15px; font-weight: 500; }
+.setup .stat { font-size: 13px; color: var(--type-lo); font-family: var(--mono); }
+.setup .done .stat { color: var(--now); }
+.setup .chev { color: var(--type-lo); font-size: 18px; line-height: 1; }
+
+/* ================================================================
+   PROGRESSIVE DISCLOSURE
+
+   Only what someone changes on day one stays visible. Everything else
+   is one tap away rather than in the way — native <details>, so it
+   works with the keyboard and without JavaScript.
+   ================================================================ */
+.more {
+    background: var(--surface);
+    border-radius: var(--radius);
+    margin-bottom: 10px;
+    overflow: hidden;
+}
+.more > summary {
+    padding: 15px 16px;
+    min-height: 52px;
+    display: flex; align-items: center; gap: 10px;
+    font-size: 15px; font-weight: 600;
+    cursor: pointer; list-style: none;
+    color: var(--type-hi);
+}
+.more > summary::-webkit-details-marker { display: none; }
+.more > summary::after {
+    content: "";
+    margin-left: auto;
+    width: 8px; height: 8px;
+    border: solid var(--type-lo);
+    border-width: 0 1.5px 1.5px 0;
+    transform: rotate(45deg) translate(-2px, -2px);
+    transition: transform 160ms ease;
+    flex: none;
+}
+.more[open] > summary::after { transform: rotate(-135deg) translate(-2px, -2px); }
+.more[open] > summary { border-bottom: 1px solid var(--border-subtle); }
+.more > summary:focus-visible { outline: 2px solid var(--now); outline-offset: -2px; }
+.more .more-body > .row:first-child { padding-top: 14px; }
+.more .group { background: none; margin-bottom: 0; }
+.more .group + .group { border-top: 1px solid var(--border-subtle); }
+
+/* A widget's configuration is pointless while the widget is off. */
+.more[data-needs][hidden] { display: none; }
+
+/* Advanced keeps the different register, and stays shut. */
+#advanced .more.danger-hint > summary { color: var(--alert); font-family: var(--mono); font-size: 14px; }
+
 /* --- Sections --- */
 section { padding-top: 34px; scroll-margin-top: 76px; }
 section > h2 {

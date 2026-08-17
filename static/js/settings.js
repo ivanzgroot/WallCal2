@@ -116,6 +116,8 @@ function bindSegments() {
             b.addEventListener('click', function () {
                 save(key, bits[0]);
                 paintSegment(key);
+                if (key.indexOf('widget_') === 0) revealWidgetConfig();
+                renderSetup();
             });
             host.appendChild(b);
         });
@@ -144,6 +146,93 @@ function applySettings(data) {
     qsa('[data-seg]').forEach(function (h) { paintSegment(h.getAttribute('data-seg')); });
     updateDensityExplanation();
     updateOverlayHint();
+    revealWidgetConfig();
+    renderSetup();
+}
+
+/** A widget's configuration is noise while the widget is switched off. */
+function revealWidgetConfig() {
+    qsa('.more[data-needs]').forEach(function (el) {
+        var key = el.getAttribute('data-needs');
+        el.hidden = (state.settings[key] || 'dynamic') === 'off';
+    });
+}
+
+// ---------------------------------------------------------------
+// Setup status
+//
+// Someone opening this for the first time needs to know what already
+// works and what still wants them. Without that, sixty controls all
+// look equally urgent — and the only one that actually matters on day
+// one is adding a calendar.
+// ---------------------------------------------------------------
+function renderSetup() {
+    var host = $('setupCard');
+    if (!host) return;
+    var s = state.settings;
+
+    var steps = [
+        { id: 'calendars', label: 'Kalender',
+          done: state.calendars.length > 0,
+          stat: state.calendars.length
+              ? state.calendars.length + (state.calendars.length === 1 ? ' Quelle' : ' Quellen')
+              : 'noch keine' },
+        { id: 'presence', label: 'Bewegungssensor',
+          done: !!(state.presence && state.presence.daemon_running),
+          // Whether distance is available decides if the wall can switch
+          // between near and far at all, so it is worth saying here.
+          stat: !(state.presence && state.presence.daemon_running) ? 'offline'
+              : ((state.presence.distance_cm === null || state.presence.distance_cm === undefined)
+                   ? 'ohne Entfernung' : 'mit Entfernung') },
+        { id: 'widgets', label: 'Wetter',
+          done: !!s.weather_lat,
+          optional: true,
+          stat: s.weather_lat ? (s.weather_place || 'eingerichtet') : 'optional' },
+        { id: 'widgets', label: 'ÖPNV',
+          done: !!s.transit_station_id,
+          optional: true,
+          stat: s.transit_station_id ? (s.transit_station_name || 'eingerichtet') : 'optional' }
+    ];
+
+    var required = steps.filter(function (x) { return !x.optional; });
+    var firstRun = required.some(function (x) { return !x.done; });
+
+    host.hidden = false;
+    host.className = 'setup' + (firstRun ? ' first-run' : '');
+    host.innerHTML = '';
+
+    if (firstRun) {
+        var intro = document.createElement('div');
+        intro.className = 'intro';
+        intro.innerHTML = '<b>Erst einmal einrichten</b><span></span>';
+        intro.querySelector('span').textContent = state.calendars.length
+            ? 'Fast fertig — der Rest unten ist Feinschliff.'
+            : 'Ohne Kalender bleibt die Wand leer. Alles andere ist optional '
+            + 'und kann warten.';
+        host.appendChild(intro);
+    }
+
+    steps.forEach(function (step) {
+        // Once everything essential is done the card shrinks to a status
+        // line: optional items stop nagging about things nobody asked for.
+        if (!firstRun && step.optional && !step.done) return;
+        var a = document.createElement('a');
+        a.className = 'step' + (step.done ? ' done' : '');
+        a.href = '#' + step.id;
+        a.innerHTML = '<span class="tick"></span><span class="label"></span>' +
+                      '<span class="stat"></span><span class="chev">›</span>';
+        a.querySelector('.label').textContent = step.label;
+        a.querySelector('.stat').textContent = step.stat;
+        host.appendChild(a);
+    });
+
+    // Adding a calendar is the one thing a new install cannot do without,
+    // so open that panel rather than making them find it.
+    var add = $('addCalDetails');
+    if (add && !state.calendars.length && !add.dataset.nudged) {
+        add.dataset.nudged = '1';
+        add.open = true;
+    }
 }
 
 // ---------------------------------------------------------------
@@ -204,8 +293,14 @@ function updateOverlayHint() {
 // ---------------------------------------------------------------
 var METER_MAX_CM = 600;   // the LD2410's own ceiling: 8 gates x 75 cm
 
+var meterTicks = 0;
+
 function renderMeter(s) {
+    var wasRunning = state.presence && state.presence.daemon_running;
     state.presence = s;
+    // The setup card carries sensor status; refresh it when that flips,
+    // rather than rebuilding the card twice a second.
+    if (!!wasRunning !== !!(s && s.daemon_running)) renderSetup();
     var dist = s && s.distance_cm;
     $('meterDist').textContent = (dist === null || dist === undefined) ? '—' : Math.round(dist);
 
@@ -341,6 +436,7 @@ function loadCalendars() {
         if (err) return;
         state.calendars = data.calendars || [];
         renderCalendars();
+        renderSetup();
     });
 }
 
