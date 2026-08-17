@@ -13,7 +13,8 @@ import sys
 import threading
 from datetime import datetime, timezone
 
-from flask import Flask, jsonify, request, send_from_directory, render_template
+from flask import (Flask, jsonify, request, send_from_directory, render_template,
+                   url_for)
 
 import config
 import database
@@ -44,6 +45,26 @@ poller = CalDAVPoller()
 # ---------------------------------------------------------------------------
 # Frontend route
 # ---------------------------------------------------------------------------
+
+@app.context_processor
+def _asset_helpers():
+    """``static_url('css/wall.css')`` — a static URL stamped with the file's
+    mtime.
+
+    The kiosk browser starts once and runs for months behind an aggressive
+    cache, with nobody in front of it to press ctrl-shift-R. Without the stamp,
+    an update leaves the wall showing the old stylesheet until something
+    evicts it.
+    """
+    def static_url(filename):
+        path = os.path.join(app.static_folder or "static", filename)
+        try:
+            stamp = int(os.path.getmtime(path))
+        except OSError:
+            stamp = 0
+        return url_for("static", filename=filename, v=stamp)
+    return {"static_url": static_url}
+
 
 @app.route("/")
 def index():
