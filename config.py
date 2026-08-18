@@ -174,7 +174,9 @@ DEFAULT_TRAVEL_WINDOW_MINUTES = 90    # only visible this long before an event
 DEFAULT_TRAVEL_BUFFER_MINUTES = 5     # arrive this early
 DEFAULT_TRAVEL_REFRESH_SECONDS = 1800
 
-# QR companion code
+# QR companion code. public_host overrides the autodetected LAN address
+# for anyone with a fixed hostname or a reverse proxy in front.
+DEFAULT_PUBLIC_HOST = ""
 DEFAULT_QR_SIZE = 96                  # px on a 1920-wide panel
 
 # --- Screensaver (off-strategy "none") ---------------------------------

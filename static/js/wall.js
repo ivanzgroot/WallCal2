@@ -503,6 +503,8 @@ function renderWeather(w) {
 
     var temp = (w.temperature === null || w.temperature === undefined)
         ? '' : w.temperature + (w.units || '°');
+
+    // FAR: one line, the temperature and the single most actionable fact.
     far.hidden = false;
     far.innerHTML = '';
     if (temp) far.appendChild(document.createTextNode(temp));
@@ -513,35 +515,65 @@ function renderWeather(w) {
         far.appendChild(sub);
     }
 
-    // NEAR gets today's shape and tomorrow's number — still not a 7-day grid.
     near.hidden = false;
     near.innerHTML = '';
-    var head = document.createElement('div');
-    head.className = 'wx-head';
-    head.textContent = temp + (w.headline ? ' · ' + w.headline : '');
-    near.appendChild(head);
 
-    if (w.hourly && w.hourly.length) {
-        var row = document.createElement('div');
-        row.className = 'wx-hours';
-        for (var i = 0; i < w.hourly.length; i++) {
-            var h = w.hourly[i];
-            var cell = document.createElement('span');
-            cell.className = 'wx-h';
-            cell.innerHTML = '<b>' + (h.temp === null ? '–' : h.temp) + '</b>' + h.at;
-            if (h.rain !== null && h.rain >= 40) cell.className += ' wet';
-            row.appendChild(cell);
-        }
-        near.appendChild(row);
+    var now = document.createElement('div');
+    now.className = 'wx-now';
+    if (temp) {
+        var b = document.createElement('b');
+        b.textContent = temp;
+        now.appendChild(b);
     }
-    if (w.tomorrow) {
+    var note = document.createElement('span');
+    if (w.headline) { note.textContent = w.headline; }
+    else { note.className = 'quiet'; note.textContent = w.place || ''; }
+    now.appendChild(note);
+    near.appendChild(now);
+
+    // Rain probability over the coming hours. This answers "do I need a
+    // coat", which a row of temperatures does not.
+    if (w.hourly && w.hourly.length) {
+        var chart = document.createElement('div');
+        chart.className = 'wx-chart';
+        var hours = document.createElement('div');
+        hours.className = 'wx-hours';
+        for (var i = 0; i < w.hourly.length && i < 10; i++) {
+            var h = w.hourly[i];
+            var rain = (h.rain === null || h.rain === undefined) ? 0 : h.rain;
+            var col = document.createElement('span');
+            col.className = 'wx-col' + (rain >= 60 ? ' soak' : (rain >= 25 ? ' wet' : ''));
+            var bar = document.createElement('i');
+            // A floor of a few percent keeps dry hours visible as a baseline
+            // rather than vanishing, so the strip still reads as a scale.
+            bar.style.height = Math.max(6, rain) + '%';
+            col.appendChild(bar);
+            chart.appendChild(col);
+
+            var label = document.createElement('span');
+            label.textContent = (i % 2 === 0) ? h.at : '';
+            hours.appendChild(label);
+        }
+        near.appendChild(chart);
+        near.appendChild(hours);
+    }
+
+    if (w.tomorrow && w.tomorrow.max !== null) {
         var tm = document.createElement('div');
         tm.className = 'wx-tomorrow';
-        tm.textContent = 'Morgen ' + (w.tomorrow.min !== null ? w.tomorrow.min + '°' : '')
-            + ' bis ' + (w.tomorrow.max !== null ? w.tomorrow.max + '°' : '');
+        tm.textContent = 'Morgen ' + w.tomorrow.min + '° bis ' + w.tomorrow.max + '°'
+            + (w.tomorrow.rain >= 40 ? ' · Regen' : '');
         near.appendChild(tm);
     }
 }
+
+//: German transit signage colours. Falls through to neutral for anything
+//: unrecognised rather than inventing a colour for it.
+var MODE_COLOURS = {
+    SUBURBAN: '#3B8A3F', SUBWAY: '#2C6BC4', TRAM: '#C0392B',
+    BUS: '#7B4EA8', COACH: '#7B4EA8', REGIONAL_RAIL: '#5A6070',
+    HIGHSPEED_RAIL: '#5A6070', LONG_DISTANCE: '#5A6070', FERRY: '#1F7A8C'
+};
 
 // --- ÖPNV ------------------------------------------------------------
 function renderTransit(t) {
@@ -566,11 +598,15 @@ function renderTransit(t) {
     for (var i = 0; i < t.departures.length; i++) {
         var d = t.departures[i];
         var row = document.createElement('div');
-        row.className = 'dep' + (d.cancelled ? ' cancelled' : '');
+        row.className = 'dep'
+            + (d.cancelled ? ' cancelled' : '')
+            + (!d.cancelled && d.minutes !== null && d.minutes >= 0 && d.minutes <= 8 ? ' soon' : '');
 
         var line = document.createElement('span');
         line.className = 'line';
         line.textContent = d.line;
+        var colour = MODE_COLOURS[String(d.mode || '').toUpperCase()];
+        if (colour) line.style.background = colour;
         row.appendChild(line);
 
         var dir = document.createElement('span');
@@ -579,9 +615,9 @@ function renderTransit(t) {
         row.appendChild(dir);
 
         var when = document.createElement('span');
-        when.className = 'when' + (d.minutes !== null && d.minutes <= 5 ? ' soon' : '');
-        when.textContent = d.when;
-        if (d.delay > 0) {
+        when.className = 'when';
+        when.textContent = d.cancelled ? 'fällt aus' : d.when;
+        if (!d.cancelled && d.delay > 0) {
             var late = document.createElement('span');
             late.className = 'late';
             late.textContent = ' +' + d.delay;

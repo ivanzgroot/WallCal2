@@ -401,6 +401,7 @@ _SETTINGS_DEFAULTS = {
     "travel_buffer_minutes": str(config.DEFAULT_TRAVEL_BUFFER_MINUTES),
     "travel_refresh_seconds": str(config.DEFAULT_TRAVEL_REFRESH_SECONDS),
     # QR
+    "public_host": config.DEFAULT_PUBLIC_HOST,
     "qr_size": str(config.DEFAULT_QR_SIZE),
     # Time-of-day layout
     "timeofday_enabled": str(config.DEFAULT_TIMEOFDAY_ENABLED).lower(),

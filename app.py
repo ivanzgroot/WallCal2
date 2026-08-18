@@ -462,9 +462,43 @@ def qr_svg():
     }
 
 
+def lan_address():
+    """The address a phone on the same network can actually reach.
+
+    request.host is wrong here: the kiosk browser loads the wall display from
+    http://localhost:5005/, so a QR code built from it sends the phone to its
+    own loopback. The Pi's LAN address has to be discovered instead.
+
+    Opening a UDP socket toward a documentation address sends no packets — it
+    only makes the kernel pick the interface it would route through, which is
+    the one the phone is on.
+    """
+    override = (database.get_setting("public_host", "") or "").strip()
+    if override:
+        return override
+
+    import socket
+    probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        probe.connect(("192.0.2.1", 1))     # TEST-NET-1, never routed
+        address = probe.getsockname()[0]
+        if address and not address.startswith("127."):
+            return address
+    except OSError:
+        pass
+    finally:
+        probe.close()
+
+    # Fall back to mDNS, which the installer enables. Android resolves .local
+    # unreliably, which is why it is second rather than first.
+    try:
+        return socket.gethostname() + ".local"
+    except OSError:
+        return request.host.split(":")[0]
+
+
 def _settings_url():
-    host = request.host.split(":")[0]
-    return f"http://{host}:{config.PORT}/settings"
+    return f"http://{lan_address()}:{config.PORT}/settings"
 
 
 @app.route("/api/prewake")

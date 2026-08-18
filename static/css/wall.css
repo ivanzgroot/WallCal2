@@ -309,7 +309,8 @@
    Every slot keeps its grid row whether or not it is filled, so a
    widget appearing or withdrawing never moves the ones around it.
    ================================================================ */
-.rail { display: grid; grid-template-rows: auto auto auto 1fr; gap: 2vh; }
+.rail { display: grid; grid-template-rows: auto 1fr auto auto auto; gap: 1.6vh; }
+.rail-gap { min-height: 1vh; }
 .slot { min-height: 0; }
 .slot[hidden] { display: block; visibility: hidden; }
 
@@ -317,35 +318,108 @@
    inventing a second transition. */
 .tod-hidden { opacity: 0; pointer-events: none; transition: opacity var(--crossfade) ease; }
 
-/* --- ÖPNV: a departure board --- */
+/* --- ÖPNV -----------------------------------------------------------
+   A departure board is a thing people already know how to read, so this
+   borrows its conventions: a coloured line badge, the destination, and
+   the time hard right on a tabular baseline. */
+.slot-transit .rail-k { margin-bottom: 0.9vh; }
+
 .dep {
     display: grid;
-    grid-template-columns: 3.4vw 1fr auto;
-    gap: 0.8vw;
-    align-items: baseline;
+    grid-template-columns: auto 1fr auto;
+    gap: 0.7vw;
+    align-items: center;
     font-size: var(--near-body);
-    margin-bottom: 0.9vh;
-}
-.dep .line { font-weight: 600; color: var(--type-hi); }
-.dep .dir  { color: var(--type-lo); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.dep .when { font-variant-numeric: tabular-nums; color: var(--type-hi); }
-.dep .when.soon { color: var(--now); }
-.dep .late { color: var(--alert); }
-.dep.cancelled { opacity: 0.55; }
-.dep.cancelled .dir, .dep.cancelled .line { text-decoration: line-through; }
-
-/* --- Weather: actionable only, never a forecast grid --- */
-.wx-head { font-size: var(--near-body); margin-bottom: 0.8vh; }
-.wx-hours { display: flex; gap: 0.7vw; margin-bottom: 0.8vh; }
-.wx-h {
-    font-size: var(--near-meta);
-    color: var(--type-lo);
-    text-align: center;
+    margin-bottom: 0.7vh;
     line-height: 1.2;
 }
-.wx-h b { display: block; color: var(--type-hi); font-weight: 400; }
-.wx-h.wet b { color: #6FA8DC; }
-.wx-tomorrow { font-size: var(--near-meta); color: var(--type-lo); }
+.dep .line {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 2.4vw;
+    padding: 0.25vh 0.4vw;
+    border-radius: 3px;
+    background: #2A2F3A;
+    color: var(--type-hi);
+    font-weight: 600;
+    font-size: var(--near-meta);
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0.02em;
+}
+.dep .dir {
+    color: var(--type-hi);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+}
+.dep .when {
+    font-variant-numeric: tabular-nums;
+    color: var(--type-lo);
+    white-space: nowrap;
+}
+/* Only the one you could still catch gets the accent. */
+.dep.soon .when { color: var(--now); font-weight: 500; }
+.dep .late { color: var(--alert); }
+.dep.cancelled { opacity: 0.5; }
+.dep.cancelled .dir { text-decoration: line-through; }
+
+/* --- Weather --------------------------------------------------------
+   Actionable only. The strip is rain probability over the next hours,
+   which answers "do I need a coat" — a row of temperatures does not, and
+   a seven-day grid is not read on a wall at all. */
+.wx-now {
+    display: flex;
+    align-items: baseline;
+    gap: 0.8vw;
+    margin-bottom: 1vh;
+}
+.wx-now b {
+    font-size: var(--near-clock);
+    font-weight: 200;
+    color: var(--type-hi);
+    line-height: 1;
+    letter-spacing: -0.02em;
+}
+.wx-now span { font-size: var(--near-body); color: var(--type-hi); }
+.wx-now span.quiet { color: var(--type-lo); }
+
+.wx-chart {
+    display: grid;
+    grid-auto-flow: column;
+    grid-auto-columns: 1fr;
+    align-items: end;
+    gap: 0.25vw;
+    height: 4.6vh;
+    margin-bottom: 0.5vh;
+}
+.wx-col { display: flex; flex-direction: column; justify-content: flex-end; height: 100%; }
+.wx-col i {
+    display: block;
+    width: 100%;
+    min-height: 2px;
+    border-radius: 1px;
+    background: #313746;
+}
+.wx-col.wet i { background: #4B7FB5; }
+.wx-col.soak i { background: #6FA8DC; }
+
+.wx-hours {
+    display: grid;
+    grid-auto-flow: column;
+    grid-auto-columns: 1fr;
+    gap: 0.25vw;
+    font-size: var(--near-label);
+    color: var(--type-lo);
+    font-variant-numeric: tabular-nums;
+}
+.wx-hours span { text-align: center; }
+.wx-tomorrow {
+    font-size: var(--near-meta);
+    color: var(--type-lo);
+    margin-top: 0.8vh;
+}
 
 /* --- Travel time: turns the calendar into a leave-now prompt --- */
 .travel { font-size: var(--near-body); color: var(--type-lo); margin-top: 0.8vh; }
