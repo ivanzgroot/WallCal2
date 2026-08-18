@@ -881,9 +881,6 @@ class PresenceDaemon:
             # Going dark: no point ramping back to full on the way out, since
             # _apply_display is about to take it to zero regardless.
             self._mode = MODE_NORMAL
-        self._density = "far"
-        self._density_pending: str | None = None
-        self._density_pending_since = 0.0
         self._apply_display(on, reason=reason)
 
     def _apply_display(self, on: bool, reason: str = "", force: bool = False) -> None:
