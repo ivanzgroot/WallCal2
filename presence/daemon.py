@@ -150,6 +150,13 @@ class Settings:
         self.night_brightness = max(0, min(100, _as_int(
             g("night_brightness"), config.DEFAULT_NIGHT_BRIGHTNESS)))
 
+        self.density_mode = str(g("density_mode") or "auto").lower()
+        self.density_near_cm = _as_int(g("density_near_cm"), 100)
+        self.density_far_cm = _as_int(g("density_far_cm"), 140)
+        self.density_min_band_cm = _as_int(g("density_min_band_cm"), 80)
+        self.density_enter_ms = max(0, _as_int(g("density_enter_ms"), 250))
+        self.density_leave_ms = max(0, _as_int(g("density_debounce_ms"), 1500))
+
         self.screensaver_style = str(g("screensaver_style")
                                      or config.DEFAULT_SCREENSAVER_STYLE).lower()
         if self.screensaver_style not in ("dim_dashboard", "clock", "blank"):
@@ -501,6 +508,9 @@ class PresenceDaemon:
         self._paused = False
         self._present = False
         self._mode = MODE_NORMAL
+        self._density = "far"
+        self._density_pending: str | None = None
+        self._density_pending_since = 0.0
         self._present_cause: str | None = None
         self._present_since: float | None = None
         self._last_present_at: float | None = None
@@ -671,6 +681,7 @@ class PresenceDaemon:
             self._last_reading = reading
             self._evaluate(reading)
 
+        self._update_density()
         self._decide_display()
         self._write_state()
 
@@ -870,6 +881,9 @@ class PresenceDaemon:
             # Going dark: no point ramping back to full on the way out, since
             # _apply_display is about to take it to zero regardless.
             self._mode = MODE_NORMAL
+        self._density = "far"
+        self._density_pending: str | None = None
+        self._density_pending_since = 0.0
         self._apply_display(on, reason=reason)
 
     def _apply_display(self, on: bool, reason: str = "", force: bool = False) -> None:
@@ -908,6 +922,77 @@ class PresenceDaemon:
         self._display_on = on
         self._display_reason = reason
         self._write_state(force=True)
+
+    # -- density ----------------------------------------------------------
+    #
+    # Decided here rather than in the browser. The daemon sees every radar
+    # frame at about 10 Hz; the browser used to poll a number four times a
+    # second purely to compare it against a threshold the daemon already
+    # knows. Moving it removes a whole round trip from something a person is
+    # standing there watching.
+
+    def _density_enabled(self) -> bool:
+        mode = self.settings.density_mode
+        if mode == "off":
+            return False
+        if mode == "on":
+            return True
+        if self._last_reading.get("distance_cm") is None:
+            return False        # gpio/none sensor modes have no distance
+        # The usable FAR band is what makes switching worth doing at all.
+        near = self.settings.density_near_cm
+        if self.settings.never_off:
+            band = 600 - near
+        else:
+            band = self.settings.distance_max_cm - near
+        return band >= self.settings.density_min_band_cm
+
+    def _update_density(self) -> None:
+        if not self._density_enabled():
+            # NEAR is the safe fallback: it is the layout that still makes
+            # sense when somebody is standing right in front of the panel.
+            self._density = "near" if self._last_reading else self._density
+            self._density_pending = None
+            return
+
+        distance = self._last_reading.get("distance_cm")
+        empty = not self._present or not distance or distance <= 0
+
+        target = None
+        if empty:
+            target = "far"          # the at-rest layout for an empty room
+        elif distance <= self.settings.density_near_cm:
+            target = "near"
+        elif distance >= self.settings.density_far_cm:
+            target = "far"
+        # Between the thresholds a frame argues for nothing. That gap is the
+        # hysteresis, and a frame landing in it must not count either way.
+
+        if target == self._density:
+            self._density_pending = None
+            return
+
+        now = time.monotonic()
+        if target is not None and self._density_pending != target:
+            self._density_pending = target
+            self._density_pending_since = now
+            return
+
+        if self._density_pending is None:
+            return
+
+        # Asymmetric, like presence itself: arriving is confirmed almost at
+        # once, leaving waits out the jitter. Hysteresis already guards the
+        # way back, so a slow entry protects nothing.
+        wait = (self.settings.density_enter_ms if self._density_pending == "near"
+                else self.settings.density_leave_ms) / 1000.0
+        if now - self._density_pending_since >= wait:
+            if self._density != self._density_pending:
+                logger.debug("Density -> %s (%s cm)", self._density_pending, distance)
+                self._density = self._density_pending
+                # Publish immediately: this is the transition being watched.
+                self._write_state(force=True)
+            self._density_pending = None
 
     def _apply_brightness(self, dim_to: float | None = None, fade_ms: int = 0,
                           reason: str = "") -> None:
@@ -976,6 +1061,7 @@ class PresenceDaemon:
             "present": self._present,
             "present_cause": self._present_cause,
             "display_mode": self._mode,
+            "density": self._density,
             "dimming": self._mode == MODE_DIMMING,
             "screensaver": {
                 "active": self._mode == MODE_SAVER,

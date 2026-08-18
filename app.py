@@ -4,6 +4,7 @@ Serves the calendar frontend, provides REST API for events, settings,
 and calendar management. Runs a background CalDAV poller thread.
 """
 
+import json
 import logging
 import os
 import shutil
@@ -11,10 +12,11 @@ import signal
 import subprocess
 import sys
 import threading
+import time
 from datetime import datetime, timezone
 
-from flask import (Flask, jsonify, request, send_from_directory, render_template,
-                   url_for)
+from flask import (Flask, Response, jsonify, request, send_from_directory,
+                   render_template, url_for)
 
 import config
 import database
@@ -498,6 +500,7 @@ def get_presence_live():
         "present": state.get("present"),
         "display_on": state.get("display_on"),
         "display_mode": state.get("display_mode", "normal"),
+        "density": state.get("density", "far"),
         "screensaver": state.get("screensaver") or {},
         "brightness": state.get("brightness", 100),
         "brightness_source": state.get("brightness_source", "css"),
@@ -505,6 +508,53 @@ def get_presence_live():
         # the wall display falls back to a single layout when it sees that.
         "distance_cm": reading.get("distance_cm"),
         "daemon_running": state.get("daemon_running", False),
+    })
+
+
+@app.route("/api/presence/stream")
+def presence_stream():
+    """Push panel state to the wall the moment it changes.
+
+    This reverses an earlier decision. The argument against SSE was that a
+    stream held open for months pins a worker thread — true, but there is
+    exactly one client, the kiosk browser. One resident thread is cheaper
+    than 345,000 requests a day, each of which spawns its own thread, and
+    polling put a fixed interval of lag in front of every transition
+    somebody is standing there watching.
+
+    The generator watches the daemon's state file on tmpfs and only writes
+    when something the wall cares about actually differs, so an idle wall
+    costs one stat per tick and nothing on the wire.
+    """
+    def watch():
+        previous = None
+        sep = chr(10) * 2          # SSE frames end on a blank line
+        # A comment line opens the stream so the browser fires onopen even
+        # when the first real change is minutes away.
+        yield ': connected' + sep
+        while True:
+            state = presence_runtime.read_state()
+            payload = {
+                'density': state.get('density', 'far'),
+                'display_on': state.get('display_on'),
+                'display_mode': state.get('display_mode', 'normal'),
+                'brightness': state.get('brightness', 100),
+                'brightness_source': state.get('brightness_source', 'css'),
+                'screensaver': state.get('screensaver') or {},
+                'daemon_running': state.get('daemon_running', False),
+            }
+            if payload != previous:
+                previous = payload
+                yield 'data: ' + json.dumps(payload) + sep
+            else:
+                # Keeps proxies and the browser from closing an idle stream.
+                yield ': keepalive' + sep
+            time.sleep(0.1)
+
+    return Response(watch(), mimetype="text/event-stream", headers={
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
+        "X-Accel-Buffering": "no",
     })
 
 

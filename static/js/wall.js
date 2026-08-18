@@ -757,93 +757,75 @@ function startOfDay(d) {
 // layout oscillates while somebody stands at the boundary. The debounce
 // is on top of that, for the radar's own frame-to-frame jitter.
 // ===============================================================
-var densityPending = null;
-var densityPendingSince = 0;
-
-function densityActive() {
-    var mode = state.settings.density_mode || 'auto';
-    if (mode === 'off') return false;
-    if (mode === 'on') return true;
-    // auto: the usable FAR band is what makes this worth doing at all. With
-    // auto-off enabled the panel is only lit inside wake_distance, so the
-    // visible band is wake_distance - near_threshold. A 20 cm band is not a
-    // feature, it is a flicker.
-    if (!state.presence || state.presence.distance_cm === null ||
-        state.presence.distance_cm === undefined) return false;
-    var wake = num(state.settings.sensor_distance_max_cm, 300);
-    var near = num(state.settings.density_near_cm, 100);
-    var strategy = String(state.settings.display_off_strategy || 'hdmi');
-    // Under 'none' the panel never sleeps, so the whole sensor range is
-    // usable rather than just what is inside the wake distance.
-    var band = strategy.indexOf('none') >= 0 ? 600 - near : wake - near;
-    return band >= num(state.settings.density_min_band_cm, 80);
-}
-
-function num(v, dflt) {
-    var n = parseFloat(v);
-    return isNaN(n) ? dflt : n;
-}
-
-function updateDensity(distance) {
-    if (!densityActive()) {
-        // Only force a layout once we positively know there is no distance to
-        // work with. Doing it before the first reading arrives would flash
-        // the wrong layout on every page load.
-        if (state.presence && state.presence.daemon_running) setDensity('near');
-        return;
-    }
-
-    var near = num(state.settings.density_near_cm, 100);
-    var far = num(state.settings.density_far_cm, 140);
-    var current = $('app').getAttribute('data-density');
-    var empty = !state.presence || state.presence.present === false
-                || distance === null || distance === undefined || distance <= 0;
-
-    // What this frame argues for. Between the two thresholds it argues for
-    // nothing — that gap is the hysteresis, and a frame landing in it must
-    // not count as evidence either way.
-    var target = null;
-    if (empty) {
-        // An empty room resolves to FAR. It is the at-rest layout, and
-        // leaving the close-up on for nobody is the wrong resting state.
-        target = 'far';
-    } else if (distance <= near) {
-        target = 'near';
-    } else if (distance >= far) {
-        target = 'far';
-    }
-
-    if (target === current) { densityPending = null; return; }
-
-    var nowMs = Date.now();
-    if (target !== null && densityPending !== target) {
-        densityPending = target;
-        densityPendingSince = nowMs;
-        return;
-    }
-
-    // The timer keeps running through neutral frames. Requiring an unbroken
-    // run of agreeing frames instead sounds stricter but is worse: radar
-    // jitter around the threshold breaks the run every time, so someone
-    // standing right at the boundary would never switch at all.
-    //
-    // Approaching is confirmed in about one frame; leaving takes the long
-    // wait. Hysteresis already guards the way back, so there is nothing for
-    // a slow entry to protect against — it only makes walking up feel dead.
-    var wait = (densityPending === 'near')
-        ? num(state.settings.density_enter_ms, 250)
-        : num(state.settings.density_debounce_ms, 1500);
-    if (densityPending && nowMs - densityPendingSince >= wait) {
-        var next = densityPending;
-        densityPending = null;
-        setDensity(next);
-    }
-}
-
 function setDensity(which) {
     var app = $('app');
+    if (which !== 'near' && which !== 'far') return;
     if (app.getAttribute('data-density') === which) return;
     app.setAttribute('data-density', which);
+}
+
+// ===============================================================
+// LIVE STATE
+//
+// Pushed over SSE rather than polled. The daemon decides the density from
+// every radar frame it sees, so all the browser has to learn is that the
+// answer changed — a few times a minute, not four times a second.
+//
+// Polling stays as the fallback: if the stream never opens or drops, a
+// wall that quietly stops responding is the worst outcome here.
+// ===============================================================
+var live = null;
+var livePollTimer = null;
+var lastDisplayOn = null;
+
+function applyLive(data) {
+    if (!data) return;
+    state.presence = data;
+    if (data.daemon_running) {
+        var on = data.display_on;
+        if (on === true && lastDisplayOn === false) {
+            forceRepaint();
+            fetchEvents();      // whoever walked up wants current data
+        }
+        if (on === true || on === false) lastDisplayOn = on;
+        applyPanelState(data);
+        applyScreensaver(data);
+    }
+    setDensity(data.density);
+}
+
+function startLive() {
+    if (typeof EventSource === 'undefined') { startLivePolling(); return; }
+    try {
+        live = new EventSource('/api/presence/stream');
+    } catch (e) {
+        startLivePolling();
+        return;
+    }
+    live.onmessage = function (evt) {
+        stopLivePolling();
+        try { applyLive(JSON.parse(evt.data)); } catch (e) {}
+    };
+    live.onerror = function () {
+        // EventSource retries on its own, but the wall must keep working in
+        // the meantime, so the slow poll takes over until a message arrives.
+        startLivePolling();
+    };
+}
+
+function startLivePolling() {
+    if (livePollTimer) return;
+    livePollTimer = setInterval(function () {
+        apiGet('/api/presence/live', function (err, data) {
+            if (!err) applyLive(data);
+        });
+    }, 2000);
+}
+
+function stopLivePolling() {
+    if (!livePollTimer) return;
+    clearInterval(livePollTimer);
+    livePollTimer = null;
 }
 
 // ===============================================================
@@ -945,8 +927,6 @@ function fetchSettings() {
 // display waking and force a repaint plus fresh data.
 // ---------------------------------------------------------------
 
-var lastDisplayOn = null;
-var wakeWatchTimer = null;
 
 function forceRepaint() {
     // Toggling a layout-affecting property invalidates the whole
@@ -957,25 +937,6 @@ function forceRepaint() {
     void el.offsetHeight;
     el.style.transform = '';
     void el.offsetHeight;
-}
-
-function watchForWake() {
-    apiGet('/api/presence/live', function(err, data) {
-        if (err || !data) return;
-        state.presence = data;
-
-        if (data.daemon_running) {
-            var on = data.display_on;
-            if (on === true && lastDisplayOn === false) {
-                forceRepaint();
-                fetchEvents();   // whoever walked up wants current data
-            }
-            if (on === true || on === false) lastDisplayOn = on;
-            applyPanelState(data);
-            applyScreensaver(data);
-        }
-        updateDensity(data.distance_cm);
-    });
 }
 
 /** Reflect the daemon's published panel state: power, mode and the single
@@ -1015,9 +976,8 @@ function init() {
         if (new Date().getSeconds() === 0) renderWall();
     }, 1000);
 
-    // Density needs sub-second latency; this endpoint is ~140 bytes.
-    watchForWake();
-    wakeWatchTimer = setInterval(watchForWake, 250);
+    // Panel state arrives pushed; nothing here polls for it.
+    startLive();
 
     // Settings live on their own page now — the wall has no pointer, and the
     // usual way in is scanning the QR code off it.

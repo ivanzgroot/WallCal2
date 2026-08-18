@@ -1,144 +1,137 @@
-"""Drive the wall display's density switching for real, in a JS engine.
+"""Density switching, now decided in the daemon.
 
-The layout swap is the one piece of behaviour that only exists in the
-browser, so reading it is not enough — this runs it.
+The logic moved out of the browser, so this drives the real daemon object
+with a synthetic clock instead of a JS engine.
 """
-import json
+import os
 import pathlib
 import sys
-
-from py_mini_racer import MiniRacer
+import tempfile
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+tmp = tempfile.mkdtemp()
+os.environ["WALLCAL_DB_PATH"] = os.path.join(tmp, "t.db")
+os.environ["WALLCAL_RUNTIME_DIR"] = os.path.join(tmp, "run")
 
-
-def build(settings=None, presence=None):
-    ctx = MiniRacer()
-    ctx.eval((ROOT / "tests" / "domshim.js").read_text(encoding="utf-8"))
-    ctx.eval("__routes = " + json.dumps({
-        "/api/settings": settings or {},
-        "/events": {"events": [], "abfall": None, "last_poll": None},
-        "/api/widgets": {"transit": {"visible": False, "departures": []},
-                         "weather": {"visible": False}, "travel": {"visible": False},
-                         "qr": {"visible": False}, "feeds": []},
-        "/api/presence/live": presence or {},
-    }) + ";")
-    ctx.eval((ROOT / "static" / "js" / "wall.js").read_text(encoding="utf-8"))
-    return ctx
-
-
-def walk(ctx, distances, present=True, step_ms=250):
-    """Feed a sequence of distances at the real poll cadence."""
-    out = []
-    for d in distances:
-        ctx.eval("__routes['/api/presence/live'] = " + json.dumps({
-            "daemon_running": True, "present": present, "display_on": True,
-            "display_mode": "normal", "brightness": 100,
-            "brightness_source": "css", "distance_cm": d,
-        }) + ";")
-        ctx.eval("__tick(%d);" % step_ms)
-        out.append((d, ctx.eval("__density()")))
-    return out
-
-
-SETTINGS = {
-    "density_mode": "auto", "density_near_cm": "100", "density_far_cm": "140",
-    "density_min_band_cm": "80", "density_debounce_ms": "1500",
-    "density_enter_ms": "250",
-    "sensor_distance_max_cm": "300", "display_off_strategy": "hdmi",
-    "near_view": "fortnight", "locale": "de-DE", "timezone": "Europe/Berlin",
-    "drift_enabled": "true", "crossfade_ms": "400", "theme": "dark",
-    "poll_interval_minutes": "5",
-}
+import database                       # noqa: E402
+database.init_db()
+import presence.daemon as pd          # noqa: E402
 
 fails = []
+SETTINGS = {
+    "display_off_strategy": "css", "density_mode": "auto",
+    "density_near_cm": "100", "density_far_cm": "140",
+    "density_min_band_cm": "80", "density_enter_ms": "250",
+    "density_debounce_ms": "1500", "sensor_distance_max_cm": "300",
+}
 
 
 def check(label, got, want):
     ok = got == want
-    print(f"  {'PASS' if ok else 'FAIL'}  {label}: {got}" + ("" if ok else f"  (want {want})"))
+    print(f"  {'PASS' if ok else 'FAIL'}  {label}: {got!r}" + ("" if ok else f"  (want {want!r})"))
     if not ok:
         fails.append(label)
 
 
-print("A. approach from across the room, then walk up")
-ctx = build(SETTINGS)
-seq = walk(ctx, [250, 250, 250, 250, 250, 250, 90, 90, 90, 90, 90])
-print("     ", seq)
-check("far while distant", seq[5][1], "far")
-check("near once close", seq[-1][1], "near")
+class Clock:
+    """Replaces time.monotonic so frames can be fed at an exact cadence."""
+    def __init__(self): self.t = 1000.0
+    def __call__(self): return self.t
+    def advance(self, ms): self.t += ms / 1000.0
 
-print("\nB. hysteresis — drifting around the boundary must not oscillate")
-ctx = build(SETTINGS)
-walk(ctx, [250] * 6)
-seq = walk(ctx, [95, 105, 95, 110, 120, 130, 118, 125, 132, 99, 121])
-print("     ", seq)
-settled = [x[1] for x in seq[4:]]
-check("commits to near despite jitter", seq[-1][1], "near")
-check("no oscillation once settled", set(settled), {"near"})
 
-print("")
-print("B2. crossing the exit threshold does switch back")
-ctx = build(SETTINGS)
-walk(ctx, [80] * 6)
-seq = walk(ctx, [150, 155, 160, 152, 158, 151, 156, 149, 160])
-print("     ", seq)
-check("far again above 140", seq[-1][1], "far")
+def daemon(**overrides):
+    database.set_many_settings(dict(SETTINGS, **overrides))
+    d = pd.PresenceDaemon()
+    d.settings = pd.Settings.load()
+    d._write_state = lambda **kw: None      # no IPC in the test
+    return d
 
-print("\nC. nobody there — the sensor stops reporting a target")
-ctx = build(SETTINGS)
-walk(ctx, [80] * 6)
-check("near while present", ctx.eval("__density()"), "near")
-seq = walk(ctx, [0, 0, 0, 0, 0, 0, 0, 0], present=False)
-print("     ", seq)
-check("returns to far when the room empties", seq[-1][1], "far")
 
-print("\nD. density_mode=off pins one layout")
-ctx = build(dict(SETTINGS, density_mode="off"))
-seq = walk(ctx, [250, 250, 250, 250, 80, 80])
-print("     ", seq)
-check("never switches", set(x[1] for x in seq), {"near"})
+def feed(d, clock, distances, present=True, step_ms=100):
+    """One radar frame per step, at the sensor's real ~10 Hz."""
+    out = []
+    for cm in distances:
+        d._last_reading = {"distance_cm": cm, "source": "uart"}
+        d._present = present and bool(cm)
+        clock.advance(step_ms)
+        d._update_density()
+        out.append((cm, d._density))
+    return out
 
-print("\nE. no distance source (gpio/none sensor mode)")
-ctx = build(SETTINGS)
-seq = walk(ctx, [None] * 6)
-print("     ", seq)
-check("falls back to near", seq[-1][1], "near")
 
-def latency(ctx, distances, want, step_ms=250):
-    """Poll frames until the layout commits. Returns milliseconds."""
-    for i, d in enumerate(distances):
-        ctx.eval("__routes['/api/presence/live'] = " + json.dumps({
-            "daemon_running": True, "present": True, "display_on": True,
-            "display_mode": "normal", "brightness": 100,
-            "brightness_source": "css", "distance_cm": d}) + ";")
-        ctx.eval("__tick(%d);" % step_ms)
-        if ctx.eval("__density()") == want:
+def commit_ms(d, clock, distances, want, step_ms=100):
+    for i, cm in enumerate(distances):
+        d._last_reading = {"distance_cm": cm, "source": "uart"}
+        d._present = bool(cm)
+        clock.advance(step_ms)
+        d._update_density()
+        if d._density == want:
             return (i + 1) * step_ms
     return None
 
 
-print("")
-print("F. how long the switch actually takes")
-ctx = build(SETTINGS)
-walk(ctx, [250] * 8)
-approach = latency(ctx, [80] * 20, "near")
-print("      far -> near: %s ms of polling" % approach)
-check("approaching commits within 500 ms", approach is not None and approach <= 500, True)
+clock = Clock()
+pd.time.monotonic = clock
 
-ctx = build(SETTINGS)
-walk(ctx, [80] * 12)
-leaving = latency(ctx, [200] * 20, "far")
-print("      near -> far: %s ms of polling" % leaving)
-check("leaving still waits out the jitter", leaving is not None and leaving >= 1500, True)
+print("A. walking up, then away")
+d = daemon()
+feed(d, clock, [250] * 25)
+check("far while distant", d._density, "far")
+feed(d, clock, [80] * 8)
+check("near once close", d._density, "near")
 
 print("")
-print("G. a single bogus frame must not flip the layout")
-ctx = build(SETTINGS)
-walk(ctx, [250] * 8)
-seq = walk(ctx, [80, 250, 250, 250, 250])
+print("B. hysteresis holds between the thresholds")
+d = daemon()
+feed(d, clock, [80] * 8)
+seq = feed(d, clock, [105, 120, 135, 118, 99, 130, 125])
 print("     ", seq)
-check("one stray close reading is ignored", seq[-1][1], "far")
+check("no oscillation in the gap", set(x[1] for x in seq), {"near"})
+
+print("")
+print("C. an empty room resolves to far")
+d = daemon()
+feed(d, clock, [80] * 8)
+check("near while present", d._density, "near")
+feed(d, clock, [0] * 25, present=False)
+check("far once nobody is there", d._density, "far")
+
+print("")
+print("D. how long it takes")
+d = daemon()
+feed(d, clock, [250] * 25)
+approach = commit_ms(d, clock, [80] * 40, "near")
+print(f"      far -> near: {approach} ms")
+check("arriving commits within 400 ms", approach is not None and approach <= 400, True)
+
+d = daemon()
+feed(d, clock, [80] * 8)
+leaving = commit_ms(d, clock, [220] * 40, "far")
+print(f"      near -> far: {leaving} ms")
+check("leaving waits out the jitter", leaving is not None and leaving >= 1500, True)
+
+print("")
+print("E. a single stray frame changes nothing")
+d = daemon()
+feed(d, clock, [250] * 25)
+seq = feed(d, clock, [80, 250, 250, 250])
+print("     ", seq)
+check("one close reading ignored", seq[-1][1], "far")
+
+print("")
+print("F. modes")
+# "off" pins the near layout — the one that makes sense standing in front
+# of the panel — and stays there whatever the distance does.
+d = daemon(density_mode="off")
+seq = feed(d, clock, [250, 80, 300, 50, 400, 90])
+check("off pins near", set(x[1] for x in seq), {"near"})
+d = daemon()
+d._last_reading = {"distance_cm": None}
+check("no distance source disables auto", d._density_enabled(), False)
+d = daemon(density_near_cm="260")
+check("band too narrow disables auto", d._density_enabled(), False)
 
 print("")
 print("ALL PASS" if not fails else "%d FAILED: %s" % (len(fails), fails))

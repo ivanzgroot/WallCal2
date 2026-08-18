@@ -545,7 +545,8 @@ Everything is also reachable from the command line:
 | `GET /settings` | The settings page |
 | `GET /events` | Cached events, plus the Abfall payload |
 | `GET /api/widgets` | Transit, weather, travel and QR, already decided |
-| `GET /api/presence/live` | ~140 bytes of live presence, polled at 500 ms |
+| `GET /api/presence/stream` | Server-sent events: panel state pushed on change |
+| `GET /api/presence/live` | The same fields polled, used as the fallback |
 | `GET /api/presence` | Full sensor telemetry |
 | `GET /api/display` | Power, brightness, off-strategy |
 | `GET /api/prewake` | The next calendar-driven wake |

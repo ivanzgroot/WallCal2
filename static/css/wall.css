@@ -52,18 +52,37 @@
 #app[data-brightness-source="css"] #dim { opacity: var(--dim-alpha, 0); }
 #app[data-power="off"] #dim { opacity: 1; }
 
-/* --- Density layers --- */
+/* --- Density layers ------------------------------------------------------
+   The Pi 3 runs Chromium with software rendering, where fading two
+   full-screen layers means repainting both every frame — which is what made
+   the crossfade stutter. These three properties keep each layer as its own
+   composited surface, so the transition only re-composites and never
+   repaints: will-change promotes it, contain stops layout and paint escaping
+   it, and the translateZ forces the promotion on older compositors that
+   ignore will-change.
+
+   The invisible layer is also taken out of painting entirely with
+   visibility, which no longer costs anything once the fade has finished. */
 .layer {
     position: absolute;
     inset: 0;
     opacity: 0;
+    visibility: hidden;
     pointer-events: none;
-    transition: opacity var(--crossfade) ease;
+    transition: opacity var(--crossfade) ease, visibility 0s linear var(--crossfade);
     display: flex;
     flex-direction: column;
+    will-change: opacity;
+    contain: layout paint style;
+    transform: translateZ(0);
+    backface-visibility: hidden;
 }
-#app[data-density="far"]  #far  { opacity: 1; }
-#app[data-density="near"] #near { opacity: 1; }
+#app[data-density="far"]  #far,
+#app[data-density="near"] #near {
+    opacity: 1;
+    visibility: visible;
+    transition: opacity var(--crossfade) ease, visibility 0s;
+}
 
 /* The night clock is FAR with everything but the time removed. */
 #app[data-mode="night"] #far .far-next,
