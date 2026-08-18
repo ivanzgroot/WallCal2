@@ -27,7 +27,7 @@ def build(settings=None, presence=None):
     return ctx
 
 
-def walk(ctx, distances, present=True, step_ms=500):
+def walk(ctx, distances, present=True, step_ms=250):
     """Feed a sequence of distances at the real poll cadence."""
     out = []
     for d in distances:
@@ -44,6 +44,7 @@ def walk(ctx, distances, present=True, step_ms=500):
 SETTINGS = {
     "density_mode": "auto", "density_near_cm": "100", "density_far_cm": "140",
     "density_min_band_cm": "80", "density_debounce_ms": "1500",
+    "density_enter_ms": "250",
     "sensor_distance_max_cm": "300", "display_off_strategy": "hdmi",
     "near_view": "fortnight", "locale": "de-DE", "timezone": "Europe/Berlin",
     "drift_enabled": "true", "crossfade_ms": "400", "theme": "dark",
@@ -80,7 +81,7 @@ print("")
 print("B2. crossing the exit threshold does switch back")
 ctx = build(SETTINGS)
 walk(ctx, [80] * 6)
-seq = walk(ctx, [150, 155, 160, 152, 158])
+seq = walk(ctx, [150, 155, 160, 152, 158, 151, 156, 149, 160])
 print("     ", seq)
 check("far again above 140", seq[-1][1], "far")
 
@@ -104,5 +105,41 @@ seq = walk(ctx, [None] * 6)
 print("     ", seq)
 check("falls back to near", seq[-1][1], "near")
 
-print("\n" + ("ALL PASS" if not fails else f"{len(fails)} FAILED: {fails}"))
+def latency(ctx, distances, want, step_ms=250):
+    """Poll frames until the layout commits. Returns milliseconds."""
+    for i, d in enumerate(distances):
+        ctx.eval("__routes['/api/presence/live'] = " + json.dumps({
+            "daemon_running": True, "present": True, "display_on": True,
+            "display_mode": "normal", "brightness": 100,
+            "brightness_source": "css", "distance_cm": d}) + ";")
+        ctx.eval("__tick(%d);" % step_ms)
+        if ctx.eval("__density()") == want:
+            return (i + 1) * step_ms
+    return None
+
+
+print("")
+print("F. how long the switch actually takes")
+ctx = build(SETTINGS)
+walk(ctx, [250] * 8)
+approach = latency(ctx, [80] * 20, "near")
+print("      far -> near: %s ms of polling" % approach)
+check("approaching commits within 500 ms", approach is not None and approach <= 500, True)
+
+ctx = build(SETTINGS)
+walk(ctx, [80] * 12)
+leaving = latency(ctx, [200] * 20, "far")
+print("      near -> far: %s ms of polling" % leaving)
+check("leaving still waits out the jitter", leaving is not None and leaving >= 1500, True)
+
+print("")
+print("G. a single bogus frame must not flip the layout")
+ctx = build(SETTINGS)
+walk(ctx, [250] * 8)
+seq = walk(ctx, [80, 250, 250, 250, 250])
+print("     ", seq)
+check("one stray close reading is ignored", seq[-1][1], "far")
+
+print("")
+print("ALL PASS" if not fails else "%d FAILED: %s" % (len(fails), fails))
 sys.exit(1 if fails else 0)

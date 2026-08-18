@@ -313,6 +313,7 @@ _SETTINGS_DEFAULTS = {
     "density_near_cm": str(config.DEFAULT_DENSITY_NEAR_CM),
     "density_far_cm": str(config.DEFAULT_DENSITY_FAR_CM),
     "density_min_band_cm": str(config.DEFAULT_DENSITY_MIN_BAND_CM),
+    "density_enter_ms": str(config.DEFAULT_DENSITY_ENTER_MS),
     "density_debounce_ms": str(config.DEFAULT_DENSITY_DEBOUNCE_MS),
     "crossfade_ms": str(config.DEFAULT_CROSSFADE_MS),
     "drift_enabled": str(config.DEFAULT_DRIFT_ENABLED).lower(),

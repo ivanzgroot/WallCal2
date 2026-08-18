@@ -36,7 +36,11 @@ from presence import ld2410                      # noqa: E402
 logger = logging.getLogger("wallcal.presence")
 
 SETTINGS_RELOAD_INTERVAL = 3.0      # seconds between settings re-reads
-STATE_WRITE_INTERVAL = 1.0          # seconds between routine state writes
+#: The wall polls this file for the distance that drives near/far switching,
+#: so a one-second write interval put a whole second of lag in front of a
+#: transition somebody is watching. It is a small JSON blob on tmpfs — the SD
+#: card never sees it — so writing it more often costs effectively nothing.
+STATE_WRITE_INTERVAL = 0.3          # seconds between routine state writes
 DISPLAY_REDETECT_INTERVAL = 15.0    # while no real backend is available
 SENSOR_RETRY_INTERVAL = 10.0        # seconds between reconnect attempts
 

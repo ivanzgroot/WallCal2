@@ -527,7 +527,7 @@ Everything is also reachable from the command line:
 
 | Setting group | Keys |
 |---|---|
-| Density | `density_mode` `density_near_cm` `density_far_cm` `density_min_band_cm` `density_debounce_ms` `crossfade_ms` |
+| Density | `density_mode` `density_near_cm` `density_far_cm` `density_min_band_cm` `density_enter_ms` `density_debounce_ms` `crossfade_ms` |
 | Layout | `near_view` `drift_enabled` `timezone` `locale` `timeofday_*` |
 | Brightness | `brightness` `dim_seconds` `dim_level` `night_mode` `night_brightness` |
 | Screensaver | `screensaver_style` `screensaver_idle_seconds` `screensaver_brightness` |

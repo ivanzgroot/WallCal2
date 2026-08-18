@@ -262,6 +262,22 @@
                          data-options="auto:Automatisch|on:Immer|off:Aus"></div>
                 </div>
                 <div class="row">
+                    <div class="row-head"><label for="setEnterMs">Reaktion beim Hinlaufen</label>
+                        <span class="value" data-value-for="density_enter_ms">—</span></div>
+                    <p class="desc">Wie schnell auf die Nahansicht umgeschaltet wird. Kurz halten —
+                       wer davorsteht, will die Details sofort.</p>
+                    <div class="control"><input type="range" id="setEnterMs" min="0" max="2000" step="50"
+                           data-setting="density_enter_ms" data-unit=" ms"></div>
+                </div>
+                <div class="row">
+                    <div class="row-head"><label for="setLeaveMs">Geduld beim Weggehen</label>
+                        <span class="value" data-value-for="density_debounce_ms">—</span></div>
+                    <p class="desc">Wie lange gewartet wird, bevor wieder auf Fernansicht gewechselt wird.
+                       Länger heißt ruhiger, wenn jemand an der Schwelle steht.</p>
+                    <div class="control"><input type="range" id="setLeaveMs" min="200" max="5000" step="100"
+                           data-setting="density_debounce_ms" data-unit=" ms"></div>
+                </div>
+                <div class="row">
                     <div class="row-head"><label for="setCrossfade">Überblendung</label>
                         <span class="value" data-value-for="crossfade_ms">—</span></div>
                     <p class="desc">Nie hart schneiden.</p>

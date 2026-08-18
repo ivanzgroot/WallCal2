@@ -116,7 +116,12 @@ DEFAULT_DENSITY_MODE = "auto"         # off | on | auto
 DEFAULT_DENSITY_NEAR_CM = 100         # closer than this -> NEAR
 DEFAULT_DENSITY_FAR_CM = 140          # further than this -> back to FAR
 DEFAULT_DENSITY_MIN_BAND_CM = 80      # narrower than this and auto declines
-DEFAULT_DENSITY_DEBOUNCE_MS = 1500
+# Asymmetric on purpose, the same way presence is: approaching should feel
+# immediate, because somebody walked up and wants the detail now. Leaving can
+# be lazy — nobody is reading it, and slowness there is what stops the layout
+# twitching when you drift around the threshold.
+DEFAULT_DENSITY_ENTER_MS = 250        # far -> near, essentially one frame
+DEFAULT_DENSITY_DEBOUNCE_MS = 1500    # near -> far
 DEFAULT_CROSSFADE_MS = 400
 
 # --- Burn-in drift ---

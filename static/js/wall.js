@@ -826,7 +826,14 @@ function updateDensity(distance) {
     // run of agreeing frames instead sounds stricter but is worse: radar
     // jitter around the threshold breaks the run every time, so someone
     // standing right at the boundary would never switch at all.
-    if (densityPending && nowMs - densityPendingSince >= num(state.settings.density_debounce_ms, 1500)) {
+    //
+    // Approaching is confirmed in about one frame; leaving takes the long
+    // wait. Hysteresis already guards the way back, so there is nothing for
+    // a slow entry to protect against — it only makes walking up feel dead.
+    var wait = (densityPending === 'near')
+        ? num(state.settings.density_enter_ms, 250)
+        : num(state.settings.density_debounce_ms, 1500);
+    if (densityPending && nowMs - densityPendingSince >= wait) {
         var next = densityPending;
         densityPending = null;
         setDensity(next);
@@ -1010,7 +1017,7 @@ function init() {
 
     // Density needs sub-second latency; this endpoint is ~140 bytes.
     watchForWake();
-    wakeWatchTimer = setInterval(watchForWake, 500);
+    wakeWatchTimer = setInterval(watchForWake, 250);
 
     // Settings live on their own page now — the wall has no pointer, and the
     // usual way in is scanning the QR code off it.
