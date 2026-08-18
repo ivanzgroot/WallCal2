@@ -785,36 +785,51 @@ function num(v, dflt) {
 }
 
 function updateDensity(distance) {
-    var app = $('app');
     if (!densityActive()) {
-        // Without a distance source there is nothing to switch on. NEAR is
-        // the safe default: it is the layout that still makes sense when you
-        // are standing right in front of it, and gpio/none sensor modes never
-        // report a distance at all.
-        setDensity('near');
+        // Only force a layout once we positively know there is no distance to
+        // work with. Doing it before the first reading arrives would flash
+        // the wrong layout on every page load.
+        if (state.presence && state.presence.daemon_running) setDensity('near');
         return;
     }
-    if (distance === null || distance === undefined || distance <= 0) return;
 
     var near = num(state.settings.density_near_cm, 100);
     var far = num(state.settings.density_far_cm, 140);
-    var current = app.getAttribute('data-density');
-    var want = current;
+    var current = $('app').getAttribute('data-density');
+    var empty = !state.presence || state.presence.present === false
+                || distance === null || distance === undefined || distance <= 0;
 
-    if (current === 'far' && distance <= near) want = 'near';
-    else if (current === 'near' && distance >= far) want = 'far';
+    // What this frame argues for. Between the two thresholds it argues for
+    // nothing — that gap is the hysteresis, and a frame landing in it must
+    // not count as evidence either way.
+    var target = null;
+    if (empty) {
+        // An empty room resolves to FAR. It is the at-rest layout, and
+        // leaving the close-up on for nobody is the wrong resting state.
+        target = 'far';
+    } else if (distance <= near) {
+        target = 'near';
+    } else if (distance >= far) {
+        target = 'far';
+    }
 
-    if (want === current) { densityPending = null; return; }
+    if (target === current) { densityPending = null; return; }
 
     var nowMs = Date.now();
-    if (densityPending !== want) {
-        densityPending = want;
+    if (target !== null && densityPending !== target) {
+        densityPending = target;
         densityPendingSince = nowMs;
         return;
     }
-    if (nowMs - densityPendingSince >= num(state.settings.density_debounce_ms, 1500)) {
+
+    // The timer keeps running through neutral frames. Requiring an unbroken
+    // run of agreeing frames instead sounds stricter but is worse: radar
+    // jitter around the threshold breaks the run every time, so someone
+    // standing right at the boundary would never switch at all.
+    if (densityPending && nowMs - densityPendingSince >= num(state.settings.density_debounce_ms, 1500)) {
+        var next = densityPending;
         densityPending = null;
-        setDensity(want);
+        setDensity(next);
     }
 }
 
@@ -894,6 +909,14 @@ function cacheAgeMinutes() {
     return (Date.now() - at.getTime()) / 60000;
 }
 
+/** Staleness is decided from the cache age, not from a failed request:
+ *  a feed quietly serving old data looks identical to a healthy one. */
+function updateSyncStatus() {
+    var age = cacheAgeMinutes();
+    if (age === null) return;
+    markStale(age > num(state.settings.poll_interval_minutes, 5) * 3);
+}
+
 function fetchSettings() {
     apiGet('/api/settings', function(err, data) {
         if (err) return;
@@ -968,7 +991,7 @@ function applyPanelState(s) {
 function init() {
     updateClock();
     clockTimer = setInterval(updateClock, 1000);
-    countdownTimer = setInterval(updateCountdown, 1000);
+    setInterval(updateSyncStatus, 60000);
 
     fetchSettings();
     fetchEvents();

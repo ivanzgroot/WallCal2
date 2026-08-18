@@ -220,7 +220,18 @@ def update_settings():
         return jsonify({"error": "No valid settings provided",
                         "rejected": rejected}), 400
 
-    database.set_many_settings(filtered)
+    try:
+        database.set_many_settings(filtered)
+    except Exception as exc:
+        # Almost always a root-owned database from an installer that did not
+        # drop privileges. The raw SQLite text says nothing a user can act on.
+        detail = str(exc)
+        if "readonly" in detail.lower() or "permission" in detail.lower():
+            detail = ("Die Datenbank ist schreibgeschützt. Auf dem Pi: "
+                      "./wallcal.sh doctor --fix")
+        logger.error("Settings write failed: %s", exc)
+        return jsonify({"error": detail}), 500
+
     logger.info("Settings updated: %s", list(filtered.keys()))
 
     # A changed station or location invalidates its cache; leaving it would
@@ -660,7 +671,11 @@ def calibration_apply():
         updates = job.apply()
     except Exception as e:
         logger.error("Applying calibration failed: %s", e)
-        return jsonify({"error": str(e)}), 500
+        detail = str(e)
+        if "readonly" in detail.lower() or "permission" in detail.lower():
+            detail = ("Die Datenbank ist schreibgeschützt. Auf dem Pi: "
+                      "./wallcal.sh doctor --fix")
+        return jsonify({"error": detail}), 500
     logger.info("Calibration applied: %s", updates)
     return jsonify({"ok": True, "updated": updates})
 

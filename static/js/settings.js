@@ -48,23 +48,53 @@ function save(key, value) {
         var body = {};
         body[key] = String(value);
         post('/api/settings', body, function (err) {
-            if (err) { flashError(key); return; }
+            if (err) { flashError(key, err); return; }
             confirmSaved(key);
         });
     }, SAVE_DEBOUNCE);
 }
 
 function confirmSaved(key) {
+    var box = $('saveError');
+    if (box) box.innerHTML = '';
     qsa('[data-value-for="' + key + '"]').forEach(function (el) {
+        el.classList.remove('failed');
         el.classList.add('saved');
         setTimeout(function () { el.classList.remove('saved'); }, 60);
     });
 }
 
-function flashError(key) {
+/** Say what happened, where it happened, in the interface's voice.
+ *  Errors explain what failed and what to try; they do not apologise. */
+function notify(hostId, kind, title, detail) {
+    var host = $(hostId);
+    if (!host) return;
+    host.innerHTML = '';
+    var box = document.createElement('div');
+    box.className = (kind === 'ok') ? 'ok-note' : 'err';
+    var b = document.createElement('b');
+    b.textContent = title;
+    box.appendChild(b);
+    if (detail) box.appendChild(document.createTextNode(detail));
+    host.appendChild(box);
+    if (kind === 'ok') {
+        setTimeout(function () { if (host.firstChild === box) host.innerHTML = ''; }, 6000);
+    }
+}
+
+/** Turn a transport-level failure into something a person can act on. */
+function reason(err) {
+    if (err === 'network') return 'Die Wand ist nicht erreichbar. WLAN prüfen.';
+    if (err === 'timeout') return 'Zeitüberschreitung — die Wand antwortet nicht.';
+    return String(err || 'Unbekannter Fehler');
+}
+
+function flashError(key, err) {
     qsa('[data-value-for="' + key + '"]').forEach(function (el) {
         el.textContent = 'nicht gespeichert';
+        el.classList.add('failed');
     });
+    notify('saveError', 'err', 'Änderung nicht gespeichert', reason(err));
 }
 
 /** The current value, in the unit the user thinks in. */
@@ -402,7 +432,9 @@ function renderCalendars() {
         dot.style.width = '32px'; dot.style.height = '32px'; dot.style.padding = '0';
         dot.style.border = 'none'; dot.style.background = 'none';
         dot.addEventListener('change', function () {
-            api('PUT', '/api/calendars/' + cal.id, { color: dot.value }, function () {});
+            api('PUT', '/api/calendars/' + cal.id, { color: dot.value }, function (err) {
+                if (err) notify('calFeedback', 'err', 'Farbe nicht gespeichert', reason(err));
+            });
         });
         item.appendChild(dot);
 
@@ -669,7 +701,12 @@ function init() {
     $('calibStart').addEventListener('click', function () {
         $('calibError').innerHTML = '';
         post('/api/sensor/calibrate', { seconds: 20, delay: 8 }, function (err) {
-            if (err) return;
+            if (err) {
+                notify('calibError', 'err', 'Messung konnte nicht starten',
+                       reason(err) + ' Läuft der Präsenz-Dienst? '
+                       + 'Prüfen mit: ./wallcal.sh presence status');
+                return;
+            }
             showCalib('calibRun');
             calibTimer = setInterval(function () {
                 get('/api/sensor/calibrate', function (e, s) { if (!e) renderCalib(s); });
@@ -680,9 +717,25 @@ function init() {
         post('/api/sensor/calibrate/cancel', {}, function () { showCalib('calibIdle'); stopCalib(); });
     });
     $('calibApply').addEventListener('click', function () {
-        post('/api/sensor/calibrate/apply', {}, function (err) {
-            if (err) return;
+        var button = $('calibApply');
+        button.disabled = true;
+        button.textContent = 'Wird übernommen…';
+        post('/api/sensor/calibrate/apply', {}, function (err, data) {
+            button.disabled = false;
+            button.textContent = 'Übernehmen';
+            if (err) {
+                // Silence here was the whole bug: the button did nothing
+                // visible whether it worked or not.
+                notify('calibError', 'err', 'Konnte nicht übernommen werden',
+                       reason(err));
+                return;
+            }
+            var applied = (data && data.updated) || {};
             showCalib('calibIdle');
+            notify('calibError', 'ok', 'Übernommen',
+                   applied.sensor_distance_max_cm
+                       ? 'Weckdistanz steht jetzt auf ' + applied.sensor_distance_max_cm + ' cm.'
+                       : 'Die gemessenen Werte sind gespeichert.');
             get('/api/settings', function (e, d) { if (!e) applySettings(d); });
         });
     });
@@ -693,14 +746,22 @@ function init() {
             setTimeout(function () { $('syncNow').textContent = 'Synchronisieren'; }, 2500); });
     });
     $('restartKiosk').addEventListener('click', function () {
-        post('/api/kiosk/restart', {}, function () {});
+        post('/api/kiosk/restart', {}, function (err) {
+            notify('feedHealth', err ? 'err' : 'ok',
+                   err ? 'Neustart fehlgeschlagen' : 'Browser startet neu',
+                   err ? reason(err) : 'Die Wand ist gleich wieder da.');
+        });
     });
 
     // --- Destructive, confirmed ---
     $('radarReset').addEventListener('click', function () {
         if (!confirm('Radar wirklich auf Werkseinstellungen zurücksetzen? ' +
                      'Alle Gates und Empfindlichkeiten gehen verloren.')) return;
-        post('/api/sensor/reset', {}, function () {});
+        post('/api/sensor/reset', {}, function (err) {
+            notify('calibError', err ? 'err' : 'ok',
+                   err ? 'Zurücksetzen fehlgeschlagen' : 'Radar zurückgesetzt',
+                   err ? reason(err) : 'Bitte jetzt neu kalibrieren.');
+        });
     });
 }
 

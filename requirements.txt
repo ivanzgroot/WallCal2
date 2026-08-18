@@ -11,3 +11,9 @@ pyserial>=3.5
 # which is a lot of subtle code for something that has to just work.
 segno>=1.6.0
 
+
+# Development only — `./wallcal.sh selftest`. The wall display's behaviour
+# lives in the browser, so the suites run it in a real JS engine rather than
+# parsing it and hoping. Not needed at runtime.
+# py-mini-racer>=0.6
+# esprima>=4.0

@@ -2127,6 +2127,18 @@ complete -F _wallcal wallcal.sh ./wallcal.sh wallcal
 EOF
 }
 
+cmd_selftest() {
+  title "Self-test"
+  # Runs the browser-side logic in a real JS engine, not just a parser.
+  # Skipped silently where the engine is unavailable — a Pi should not need
+  # it to run WallCal, only to develop it.
+  if ! py -c "import py_mini_racer" >/dev/null 2>&1; then
+    warn "py_mini_racer not installed — JavaScript suites will be skipped"
+    say "  install with: $VENV_DIR/bin/pip install py-mini-racer esprima"
+  fi
+  py "$APP_DIR/tests/run.py"
+}
+
 cmd_version() { printf '%s %s\n' "$APP_NAME" "$WALLCAL_VERSION"; }
 
 cmd_help() {
@@ -2194,6 +2206,7 @@ ${C_BOLD}DATA${C_RESET}
 
 ${C_BOLD}DIAGNOSTICS${C_RESET}
   doctor [--fix]           Full system check, optionally self-healing
+  selftest                 Run the test suites (needs the dev extras)
   info                     Everything about this installation
   url | open               Where the calendar lives
   completion               Emit a bash completion script
@@ -2310,6 +2323,7 @@ main() {
     url)                  cmd_url "$@" ;;
     open)                 cmd_open "$@" ;;
     completion)           cmd_completion "$@" ;;
+    selftest|test)        cmd_selftest ;;
     version)              cmd_version ;;
     help|"")              cmd_help ;;
     *)
