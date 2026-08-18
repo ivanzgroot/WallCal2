@@ -480,12 +480,25 @@ function fetchWidgets() {
 
 function renderWidgets() {
     var w = state.widgets || {};
-    renderWeather(w.weather);
-    renderTransit(w.transit);
-    renderTravel(w.travel);
-    renderAbfall();
-    renderQr(w.qr);
-    markFeedStaleness(w.feeds);
+    // Each widget is drawn behind its own guard. One of them throwing used to
+    // take every widget after it down with it, which on a wall reads as half
+    // the display having vanished for no stated reason.
+    draw('weather', function () { renderWeather(w.weather); });
+    draw('transit', function () { renderTransit(w.transit); });
+    draw('travel', function () { renderTravel(w.travel); });
+    draw('abfall', function () { renderAbfall(); });
+    draw('qr', function () { renderQr(w.qr); });
+    draw('feeds', function () { markFeedStaleness(w.feeds); });
+}
+
+function draw(name, fn) {
+    try {
+        fn();
+    } catch (e) {
+        if (window.console && console.warn) {
+            console.warn('widget ' + name + ' failed to render: ' + e);
+        }
+    }
 }
 
 /** A feed quietly serving old data gets the same dot as a failed sync. */
@@ -497,14 +510,52 @@ function markFeedStaleness(list) {
 }
 
 // --- Weather ---------------------------------------------------------
+
+//: WMO weather codes, as Open-Meteo reports them, mapped onto the symbol
+//: set in the template. Grouped rather than enumerated: the distinctions
+//: WMO draws between "light" and "moderate" drizzle are not ones anybody
+//: needs from across a kitchen.
+function weatherIcon(code, isDay) {
+    var c = (code === null || code === undefined) ? -1 : Number(code);
+    if (c === 0 || c === 1) return isDay === false ? 'i-moon' : 'i-sun';
+    if (c === 2) return isDay === false ? 'i-partly-night' : 'i-partly';
+    if (c === 3) return 'i-cloud';
+    if (c === 45 || c === 48) return 'i-fog';
+    if (c >= 51 && c <= 57) return 'i-drizzle';
+    if (c >= 61 && c <= 67) return 'i-rain';
+    if ((c >= 71 && c <= 77) || c === 85 || c === 86) return 'i-snow';
+    if (c >= 80 && c <= 82) return 'i-rain';
+    if (c >= 95) return 'i-storm';
+    return 'i-cloud';
+}
+
+function isWet(code) {
+    var c = Number(code);
+    return (c >= 51 && c <= 67) || (c >= 80 && c <= 99);
+}
+
+/** An <svg><use> node for one symbol. */
+function icon(name, size, className) {
+    var svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('width', size);
+    svg.setAttribute('height', size);
+    svg.setAttribute('viewBox', '0 0 24 24');
+    if (className) svg.setAttribute('class', className);
+    var use = document.createElementNS('http://www.w3.org/2000/svg', 'use');
+    use.setAttribute('href', '#' + name);
+    svg.appendChild(use);
+    return svg;
+}
+
 function renderWeather(w) {
     var far = $('farWeather'), near = $('nearWeather');
     if (!w || !w.visible) { far.hidden = true; near.hidden = true; return; }
 
+    var unit = w.units || '°';
     var temp = (w.temperature === null || w.temperature === undefined)
-        ? '' : w.temperature + (w.units || '°');
+        ? '' : w.temperature + unit;
 
-    // FAR: one line, the temperature and the single most actionable fact.
+    // FAR: one line. The symbol would be a decoration at four metres.
     far.hidden = false;
     far.innerHTML = '';
     if (temp) far.appendChild(document.createTextNode(temp));
@@ -515,54 +566,69 @@ function renderWeather(w) {
         far.appendChild(sub);
     }
 
+    // NEAR: the arrangement a phone uses, because everyone can read it.
     near.hidden = false;
     near.innerHTML = '';
 
     var now = document.createElement('div');
     now.className = 'wx-now';
-    if (temp) {
-        var b = document.createElement('b');
-        b.textContent = temp;
-        now.appendChild(b);
+    var deg = document.createElement('span');
+    deg.className = 'deg';
+    deg.textContent = temp;
+    now.appendChild(deg);
+
+    var meta = document.createElement('span');
+    meta.className = 'meta';
+    var line = document.createElement('b');
+    line.textContent = w.headline || w.place || '';
+    meta.appendChild(line);
+    if (w.feels_like !== null && w.feels_like !== undefined) {
+        meta.appendChild(document.createTextNode('gefühlt ' + w.feels_like + unit
+            + (w.place && w.headline ? ' · ' + w.place : '')));
     }
-    var note = document.createElement('span');
-    if (w.headline) { note.textContent = w.headline; }
-    else { note.className = 'quiet'; note.textContent = w.place || ''; }
-    now.appendChild(note);
+    now.appendChild(meta);
+
+    var big = icon(weatherIcon(w.code, w.is_day), 34,
+                   'icon' + (isWet(w.code) ? ' wet' : ''));
+    big.setAttribute('class', 'icon' + (isWet(w.code) ? ' wet' : ''));
+    now.appendChild(big);
     near.appendChild(now);
 
-    // Rain probability over the coming hours. This answers "do I need a
-    // coat", which a row of temperatures does not.
     if (w.hourly && w.hourly.length) {
-        var chart = document.createElement('div');
-        chart.className = 'wx-chart';
         var hours = document.createElement('div');
         hours.className = 'wx-hours';
-        for (var i = 0; i < w.hourly.length && i < 10; i++) {
+        for (var i = 0; i < w.hourly.length && i < 5; i++) {
             var h = w.hourly[i];
-            var rain = (h.rain === null || h.rain === undefined) ? 0 : h.rain;
-            var col = document.createElement('span');
-            col.className = 'wx-col' + (rain >= 60 ? ' soak' : (rain >= 25 ? ' wet' : ''));
-            var bar = document.createElement('i');
-            // A floor of a few percent keeps dry hours visible as a baseline
-            // rather than vanishing, so the strip still reads as a scale.
-            bar.style.height = Math.max(6, rain) + '%';
-            col.appendChild(bar);
-            chart.appendChild(col);
+            var cell = document.createElement('div');
+            cell.className = 'wx-h' + (isWet(h.code) ? ' wet' : '');
 
-            var label = document.createElement('span');
-            label.textContent = (i % 2 === 0) ? h.at : '';
-            hours.appendChild(label);
+            var tt = document.createElement('span');
+            tt.className = 't';
+            tt.textContent = (h.temp === null ? '–' : h.temp + '°');
+            cell.appendChild(tt);
+            cell.appendChild(icon(weatherIcon(h.code, h.is_day), 17));
+
+            var rain = document.createElement('span');
+            var pct = (h.rain === null || h.rain === undefined) ? 0 : h.rain;
+            rain.className = 'p' + (pct < 20 ? ' dry' : '');
+            rain.textContent = pct + ' %';
+            cell.appendChild(rain);
+
+            var hh = document.createElement('span');
+            hh.className = 'hh';
+            hh.textContent = h.at;
+            cell.appendChild(hh);
+            hours.appendChild(cell);
         }
-        near.appendChild(chart);
         near.appendChild(hours);
     }
 
     if (w.tomorrow && w.tomorrow.max !== null) {
         var tm = document.createElement('div');
         tm.className = 'wx-tomorrow';
-        tm.textContent = 'Morgen ' + w.tomorrow.min + '° bis ' + w.tomorrow.max + '°'
-            + (w.tomorrow.rain >= 40 ? ' · Regen' : '');
+        tm.appendChild(icon(weatherIcon(w.tomorrow.code, true), 14));
+        tm.appendChild(document.createTextNode(
+            'Morgen ' + w.tomorrow.min + '° bis ' + w.tomorrow.max + '°'));
         near.appendChild(tm);
     }
 }
@@ -670,39 +736,72 @@ function abfallState(now) {
 
 function renderAbfall() {
     var vis = (state.settings.widget_abfall || 'dynamic');
-    var hosts = [$('farBin'), $('nearBin')];
-    var i;
-    if (vis === 'off') {
-        for (i = 0; i < hosts.length; i++) hosts[i].hidden = true;
-        return;
-    }
+    var near = $('nearBin'), far = $('farBin');
+    if (vis === 'off') { near.hidden = true; far.hidden = true; return; }
 
     var st = abfallState(new Date());
-    // dynamic shows only inside the banner window; always shows the next
-    // collection date whenever there is one.
+    // dynamic shows only inside the banner window; always keeps the next
+    // collection date up permanently.
     var show = st && (st.when !== null || vis === 'always');
-    for (i = 0; i < hosts.length; i++) {
-        var host = hosts[i];
-        if (!show) { host.hidden = true; continue; }
-        host.hidden = false;
-        host.innerHTML = '';
-        // Several fractions on one day render together rather than the last
-        // one overwriting the rest.
-        for (var f = 0; f < st.day.fractions.length; f++) {
-            var fr = st.day.fractions[f];
-            var swatch = document.createElement('i');
-            swatch.style.background = fr.color;
-            host.appendChild(swatch);
-            var label = document.createElement('span');
-            label.textContent = st.when ? fr.label + ' raus' : fr.label;
-            host.appendChild(label);
+    if (!show) { near.hidden = true; far.hidden = true; return; }
+
+    var fractions = st.day.fractions;
+    var primary = fractions[0] || { label: 'Abfall', color: '#8A8F9C' };
+    var when = st.when === 'heute' ? 'Heute' : (st.when === 'morgen' ? 'Morgen' : null);
+
+    // NEAR: a card at the top of the rail, in the fraction's own colour.
+    near.hidden = false;
+    near.style.setProperty('--fraction', primary.color);
+    near.innerHTML = '';
+
+    var row = document.createElement('div');
+    row.className = 'abfall-row';
+    row.appendChild(icon('i-bin', 30));
+
+    var text = document.createElement('div');
+    var what = document.createElement('div');
+    what.className = 'abfall-what';
+    what.textContent = when ? primary.label + ' raus' : primary.label;
+    text.appendChild(what);
+
+    var sub = document.createElement('div');
+    sub.className = 'abfall-when';
+    sub.textContent = when
+        ? when + (st.when === 'morgen' ? ' früh abholen' : ' abholen')
+        : fdate(fmt.weekdaySm, new Date(st.day.date + 'T00:00:00')) + ', '
+          + fdate(fmt.dayMonth, new Date(st.day.date + 'T00:00:00'));
+    text.appendChild(sub);
+    row.appendChild(text);
+    near.appendChild(row);
+
+    // Several fractions on one day render together rather than the last one
+    // overwriting the rest.
+    if (fractions.length > 1) {
+        var more = document.createElement('div');
+        more.className = 'abfall-more';
+        for (var i = 1; i < fractions.length; i++) {
+            var chip = document.createElement('span');
+            chip.className = 'abfall-chip';
+            chip.style.color = fractions[i].color;
+            chip.textContent = fractions[i].label;
+            more.appendChild(chip);
         }
-        if (!st.when) {
-            var date = document.createElement('span');
-            date.className = 'sub';
-            date.textContent = ' ' + fdate(fmt.weekdaySm, new Date(st.day.date + 'T00:00:00'));
-            host.appendChild(date);
-        }
+        near.appendChild(more);
+    }
+
+    // FAR: the same fact as a banner, big enough to read across the room.
+    far.hidden = false;
+    far.style.setProperty('--fraction', primary.color);
+    far.innerHTML = '';
+    far.appendChild(icon('i-bin', 40));
+    var label = document.createElement('span');
+    label.textContent = when ? primary.label + ' raus' : primary.label;
+    far.appendChild(label);
+    if (fractions.length > 1) {
+        var extra = document.createElement('span');
+        extra.className = 'sub';
+        extra.textContent = '+ ' + (fractions.length - 1);
+        far.appendChild(extra);
     }
 }
 

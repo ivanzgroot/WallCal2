@@ -26,12 +26,13 @@ WIDGETS = {
          "delay": 0, "cancelled": True, "mode": "SUBWAY"}]},
     "weather": {"visible": True, "temperature": 18, "units": "°",
                 "headline": "Regen ab 15:00", "place": "Regensburg",
-                "hourly": [{"at": "13", "temp": 18, "rain": 5},
-                           {"at": "14", "temp": 19, "rain": 20},
-                           {"at": "15", "temp": 18, "rain": 75},
-                           {"at": "16", "temp": 17, "rain": 60},
-                           {"at": "17", "temp": 16, "rain": 30}],
-                "tomorrow": {"min": 12, "max": 21, "rain": 55}},
+                "code": 63, "is_day": True, "feels_like": 20,
+                "hourly": [{"at": "13", "temp": 18, "rain": 5, "code": 2, "is_day": True},
+                           {"at": "14", "temp": 19, "rain": 20, "code": 3, "is_day": True},
+                           {"at": "15", "temp": 18, "rain": 75, "code": 63, "is_day": True},
+                           {"at": "16", "temp": 17, "rain": 60, "code": 61, "is_day": True},
+                           {"at": "17", "temp": 16, "rain": 30, "code": 3, "is_day": True}],
+                "tomorrow": {"min": 12, "max": 21, "rain": 55, "code": 0}},
     "travel": {"visible": False}, "qr": {"visible": False}, "feeds": [],
 }
 
@@ -82,14 +83,25 @@ check("temperature shown", "18°" in wx, True)
 check("headline shown", "Regen ab 15:00" in wx, True)
 check("tomorrow shown", "Morgen 12° bis 21°" in wx, True)
 check("rain flagged for tomorrow", "Regen" in wx, True)
-bars = ctx.eval(
+cells = ctx.eval(
     "(function(){var n=document.getElementById('nearWeather');"
-    "var c=n.children.filter(function(x){return String(x.className).indexOf('wx-chart')>=0;})[0];"
-    "return c.children.map(function(col){return col.children[0].style.height;}).join(',');})()"
-).split(",")
-print("      bar heights:", bars)
-check("dry hours keep a visible baseline", bars[0], "6%")
-check("wet hour scales with probability", bars[2], "75%")
+    "var c=n.children.filter(function(x){return String(x.className).indexOf('wx-hours')>=0;})[0];"
+    "return c ? c.children.length : 0;})()")
+check("five hours shown", cells, 5)
+icons = ctx.eval(
+    "(function(){var n=document.getElementById('nearWeather');"
+    "var c=n.children.filter(function(x){return String(x.className).indexOf('wx-hours')>=0;})[0];"
+    "return c.children.map(function(cell){"
+    "  var svg=cell.children.filter(function(x){return x.tagName==='SVG';})[0];"
+    "  return svg ? svg.children[0].getAttribute('href') : '?';}).join(',');})()")
+print("      Stundensymbole:", icons)
+check("rainy hour gets the rain symbol", icons.split(",")[2], "#i-rain")
+check("dry hour does not", icons.split(",")[0] in ("#i-partly", "#i-sun", "#i-cloud"), True)
+wet = ctx.eval(
+    "(function(){var n=document.getElementById('nearWeather');"
+    "var c=n.children.filter(function(x){return String(x.className).indexOf('wx-hours')>=0;})[0];"
+    "return c.children.filter(function(x){return String(x.className).indexOf('wet')>=0;}).length;})()")
+check("wet hours flagged", wet, 2)
 
 print("")
 print("Nothing to say — the widget withdraws")
@@ -99,6 +111,59 @@ ctx.eval("__routes['/api/widgets'] = " + json.dumps(
 ctx.eval("__tick(30000);")
 check("board hidden", hidden("transitBoard"), True)
 check("weather hidden", hidden("nearWeather"), True)
+
+print("")
+
+
+print("")
+print("Weather symbols follow the WMO code")
+
+
+def symbol_for(code, is_day=True):
+    """Render a payload with this code and read back the symbol used."""
+    ctx.eval("__routes['/api/widgets'] = " + json.dumps(dict(
+        WIDGETS, weather=dict(WIDGETS["weather"], code=code, is_day=is_day))) + ";")
+    ctx.eval("__tick(30000);")
+    return ctx.eval(
+        "(function(){var n=document.getElementById('nearWeather');"
+        "var now=n.children[0];"
+        "var svg=now.children.filter(function(x){return x.tagName==='SVG';})[0];"
+        "return svg ? svg.children[0].getAttribute('href') : '?';})()")
+
+
+for code, day, want in [(0, True, "#i-sun"), (0, False, "#i-moon"),
+                        (2, True, "#i-partly"), (2, False, "#i-partly-night"),
+                        (3, True, "#i-cloud"), (45, True, "#i-fog"),
+                        (53, True, "#i-drizzle"), (63, True, "#i-rain"),
+                        (73, True, "#i-snow"), (81, True, "#i-rain"),
+                        (95, True, "#i-storm"), (None, True, "#i-cloud")]:
+    check("code %s%s" % (code, "" if day else " nachts"), symbol_for(code, day), want)
+
+print("")
+print("Cards reflow instead of leaving a hole")
+# Everything visible, then transit withdraws: the remaining cards must stay
+# in the flow and grow, which means they must not be display:none.
+ctx.eval("__routes['/api/widgets'] = " + json.dumps(WIDGETS) + ";")
+ctx.eval("__tick(30000);")
+check("transit card present", hidden("transitBoard"), False)
+ctx.eval("__routes['/api/widgets'] = " + json.dumps(
+    dict(WIDGETS, transit={"visible": False, "departures": []})) + ";")
+ctx.eval("__tick(30000);")
+check("transit card withdrawn", hidden("transitBoard"), True)
+check("weather still there to take the space", hidden("nearWeather"), False)
+
+css = (ROOT / "static" / "css" / "wall.css").read_text(encoding="utf-8")
+check("hidden cards stay in the flow", "display: flex;" in
+      css.split(".box[hidden] {")[1].split("}")[0], True)
+check("cards grow into free space", "flex: 1 1 auto" in css, True)
+check("collapse is animated", "max-height var(--reflow)" in css, True)
+check("margin collapses too, not just height",
+      "margin-bottom: 0;" in css.split(".box[hidden] {")[1].split("}")[0], True)
+
+print("")
+print("Abfall is the loud one")
+check("uses the fraction colour", "--fraction" in css, True)
+check("has its own card style", ".box.abfall" in css, True)
 
 print("")
 print("ALL PASS" if not fails else "%d FAILED: %s" % (len(fails), fails))

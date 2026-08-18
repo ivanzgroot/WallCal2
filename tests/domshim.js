@@ -11,9 +11,9 @@ var __detailsNodes = [];
 var __requests = [];
 
 function __node(id) {
-    return {
+    var node = {
         id: id, _attrs: {}, _cls: {}, style: { setProperty: function (k, v) { this[k] = v; } },
-        tagName: 'DIV', hidden: false, textContent: '', innerHTML: '', value: '',
+        tagName: 'DIV', hidden: false, textContent: '', value: '',
         checked: false, dataset: {}, children: [],
         getAttribute: function (k) { return (k in this._attrs) ? this._attrs[k] : null; },
         setAttribute: function (k, v) { this._attrs[k] = String(v); },
@@ -35,6 +35,15 @@ function __node(id) {
         scrollIntoView: function () {}, focus: function () {},
         getBoundingClientRect: function () { return { top: 0 }; }
     };
+    // innerHTML = '' is how the renderers clear a node before redrawing it.
+    // Leaving children in place made every read return the first render ever
+    // performed, which quietly turned these tests into a lie.
+    var _html = '';
+    Object.defineProperty(node, 'innerHTML', {
+        get: function () { return _html; },
+        set: function (v) { _html = String(v); if (!v) node.children.length = 0; }
+    });
+    return node;
 }
 
 var __nodes = {};
@@ -70,6 +79,7 @@ var document = {
         return [];
     },
     createElement: function (t) { var n = __node('new-' + t); n.tagName = t.toUpperCase(); return n; },
+    createElementNS: function (ns, t) { var n = __node('svg-' + t); n.tagName = t.toUpperCase(); return n; },
     createTextNode: function (t) { return { nodeValue: t, textContent: t }; },
     addEventListener: function () {}
 };

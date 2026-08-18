@@ -11,6 +11,9 @@
    ================================================================ */
 
 #app {
+    --card: #13151C;
+    --card-edge: #20242F;
+    --reflow: 420ms;
     position: fixed;
     inset: 0;
     background: var(--ink);
@@ -249,25 +252,121 @@
 .cal-grid.rows-2 .ev { white-space: normal; margin-bottom: 0.6vh; }
 .more { font-size: var(--near-meta); color: var(--type-lo); padding-left: 0.4vw; }
 
-/* --- The rail: time-ordered actions, not a widget column ---------------- */
+/* ================================================================
+   CARDS
+
+   Each region sits on its own raised surface. Only in NEAR: from four
+   metres a border is just a line, and the clock needs the room more
+   than the grouping does — FAR stays frameless.
+   ================================================================ */
+.box {
+    background: var(--card);
+    border: 1px solid var(--card-edge);
+    border-radius: 0.9vw;
+    padding: 1.1vh 0.9vw;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+/* --- The rail ------------------------------------------------------------
+   Cards share the column and grow into whatever space is free, so a widget
+   withdrawing does not leave a hole. The collapse is animated rather than
+   instant: the height runs to zero over the crossfade and the neighbours
+   expand continuously as it does, which is the difference between a layout
+   that reflows and one that jumps.
+
+   Margin rather than gap, because a gap survives its collapsed item and
+   leaves exactly the hole this is meant to avoid. */
 .rail { display: flex; flex-direction: column; min-height: 0; }
+.rail > .box { flex: 1 1 auto; margin-bottom: 1.4vh; }
+.rail > .box:last-of-type { margin-bottom: 0; }
+
+.box[hidden] {
+    /* [hidden] would otherwise be display:none, which cannot animate. */
+    display: flex;
+    flex: 0 0 0;
+    max-height: 0;
+    min-height: 0;
+    padding-top: 0;
+    padding-bottom: 0;
+    margin-bottom: 0;
+    border-width: 0;
+    opacity: 0;
+}
+.box {
+    max-height: 200vh;
+    transition: max-height var(--reflow) ease,
+                padding var(--reflow) ease,
+                margin var(--reflow) ease,
+                border-width var(--reflow) ease,
+                opacity calc(var(--reflow) * 0.6) ease;
+}
+
 .rail-k {
     font-size: var(--near-label);
     font-weight: 600;
     letter-spacing: 0.2em;
     text-transform: uppercase;
     color: var(--type-lo);
-    margin-bottom: 1.2vh;
+    margin-bottom: 1vh;
+    flex: none;
 }
-.rail-k.n { margin-top: 2.4vh; }
-.rail .r { display: flex; gap: 0.9vw; margin-bottom: 1.2vh;
+.rail .r { display: flex; gap: 0.9vw; margin-bottom: 1.1vh;
            font-size: var(--near-body); line-height: 1.3; }
 .rail .r .t { color: var(--type-lo); flex: none; min-width: 4.4vw; }
 .rail .r .t.now { color: var(--now); }
 .rail .r .s { display: block; font-size: var(--near-meta); color: var(--type-lo); margin-top: 0.2vh; }
 .rail .r .s.go { color: var(--alert); }
 .rail .empty { font-size: var(--near-body); color: var(--type-lo); }
-.rail-foot { margin-top: auto; display: flex; align-items: flex-end; gap: 0.8vw; }
+
+/* --- Abfall: the one widget that has to be unmissable -------------------
+   It only appears in a narrow window around collection day, and the whole
+   point of it is that you see it on the way past. So it takes the top of
+   the rail, carries the fraction's own colour, and is the only card that
+   is allowed to shout. */
+.box.abfall {
+    flex: none;
+    background: linear-gradient(135deg, var(--fraction, #6FAE3F)22, var(--card) 70%);
+    border-color: color-mix(in srgb, var(--fraction, #6FAE3F) 45%, transparent);
+    border-left: 0.35vw solid var(--fraction, #6FAE3F);
+    padding: 1.4vh 1vw;
+}
+.abfall-row { display: flex; align-items: center; gap: 0.8vw; }
+.abfall-row svg { flex: none; color: var(--fraction, #6FAE3F); }
+.abfall-what { font-size: var(--near-title); font-weight: 600; line-height: 1.15; }
+.abfall-when { font-size: var(--near-meta); color: var(--type-lo); margin-top: 0.2vh; }
+.abfall-more { display: flex; gap: 0.5vw; margin-top: 0.6vh; flex-wrap: wrap; }
+.abfall-chip {
+    font-size: var(--near-meta);
+    padding: 0.15vh 0.5vw;
+    border-radius: 0.3vw;
+    background: #ffffff14;
+}
+
+/* FAR gets the same information as a banner rather than a card. */
+.far-bin {
+    position: absolute;
+    right: 5vw;
+    bottom: 5.5vh;
+    display: flex;
+    align-items: center;
+    gap: 1.1vw;
+    font-size: var(--far-title);
+    font-weight: 500;
+    padding: 1.2vh 1.6vw;
+    border-radius: 0.8vw;
+    background: linear-gradient(135deg, var(--fraction, #6FAE3F)26, transparent);
+    border-left: 0.3vw solid var(--fraction, #6FAE3F);
+}
+.far-bin svg { color: var(--fraction, #6FAE3F); flex: none; }
+.far-bin .sub { font-size: var(--far-body); color: var(--type-lo); font-weight: 400; }
+
+.rail-foot { flex: none; display: flex; align-items: center; gap: 0.8vw;
+             margin-top: 1.2vh; font-size: var(--near-body); }
+.qr { margin-left: auto; opacity: 0.5; }
+.qr img { display: block; width: 100%; height: 100%; }
 
 /* --- Staleness: a dot, never a banner ---------------------------------- */
 .stale {
@@ -366,59 +465,64 @@
 .dep.cancelled .dir { text-decoration: line-through; }
 
 /* --- Weather --------------------------------------------------------
-   Actionable only. The strip is rain probability over the next hours,
-   which answers "do I need a coat" — a row of temperatures does not, and
-   a seven-day grid is not read on a wall at all. */
-.wx-now {
-    display: flex;
-    align-items: baseline;
-    gap: 0.8vw;
-    margin-bottom: 1vh;
-}
-.wx-now b {
+   Laid out the way a phone does it, because that is the arrangement
+   everybody can already read: the temperature large, the one thing that
+   matters beside it, the condition as a symbol, then the coming hours.
+
+   Symbols are inline SVG. A wall display often has no internet, so an
+   icon font or a sprite fetched from anywhere would be a blank box at
+   exactly the wrong moment. */
+.wx-now { display: flex; align-items: center; gap: 0.9vw; margin-bottom: 1.1vh; }
+.wx-now .deg {
     font-size: var(--near-clock);
     font-weight: 200;
     color: var(--type-hi);
     line-height: 1;
-    letter-spacing: -0.02em;
+    letter-spacing: -0.03em;
 }
-.wx-now span { font-size: var(--near-body); color: var(--type-hi); }
-.wx-now span.quiet { color: var(--type-lo); }
-
-.wx-chart {
-    display: grid;
-    grid-auto-flow: column;
-    grid-auto-columns: 1fr;
-    align-items: end;
-    gap: 0.25vw;
-    height: 4.6vh;
-    margin-bottom: 0.5vh;
-}
-.wx-col { display: flex; flex-direction: column; justify-content: flex-end; height: 100%; }
-.wx-col i {
+.wx-now .meta { font-size: var(--near-meta); color: var(--type-lo); line-height: 1.35; min-width: 0; }
+.wx-now .meta b {
     display: block;
-    width: 100%;
-    min-height: 2px;
-    border-radius: 1px;
-    background: #313746;
+    color: var(--type-hi);
+    font-weight: 400;
+    font-size: var(--near-body);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
-.wx-col.wet i { background: #4B7FB5; }
-.wx-col.soak i { background: #6FA8DC; }
+.wx-now .icon { margin-left: auto; flex: none; color: #9BA3B4; }
+.wx-now .icon.wet { color: #8FB8DE; }
 
 .wx-hours {
     display: grid;
     grid-auto-flow: column;
     grid-auto-columns: 1fr;
-    gap: 0.25vw;
-    font-size: var(--near-label);
-    color: var(--type-lo);
-    font-variant-numeric: tabular-nums;
+    gap: 0.3vw;
+    text-align: center;
 }
-.wx-hours span { text-align: center; }
+.wx-h {
+    background: #171A22;
+    border-radius: 0.35vw;
+    padding: 0.5vh 0.1vw;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.25vh;
+}
+.wx-h .t { font-size: var(--near-body); color: var(--type-hi); }
+.wx-h svg { color: #9BA3B4; }
+.wx-h.wet svg { color: #8FB8DE; }
+.wx-h .p { font-size: var(--near-label); color: #6FA8DC; }
+.wx-h .p.dry { color: var(--type-lo); }
+.wx-h .hh { font-size: var(--near-label); color: var(--type-lo); }
+
 .wx-tomorrow {
+    display: flex;
+    align-items: center;
+    gap: 0.5vw;
     font-size: var(--near-meta);
     color: var(--type-lo);
-    margin-top: 0.8vh;
+    margin-top: 0.9vh;
 }
 
 /* --- Travel time: turns the calendar into a leave-now prompt --- */
@@ -454,3 +558,9 @@
    make sure FAR is the layer showing. */
 #app[data-saver="dim_dashboard"] #far { opacity: 1; }
 #app[data-saver="dim_dashboard"] #near { opacity: 0; }
+
+/* The reflow is motion too. Honoured on the wall, where somebody sensitive
+   to it would be exposed for months rather than for one page visit. */
+@media (prefers-reduced-motion: reduce) {
+    .box { transition: none; }
+}

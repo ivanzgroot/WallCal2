@@ -159,8 +159,12 @@ def _weather(settings, allow_fetch, now):
     current = data.get("current") or {}
     temp = current.get("temperature_2m")
     headline = data.get("headline")
+    feels = current.get("apparent_temperature")
     slot.update({
         "temperature": round(temp) if temp is not None else None,
+        "feels_like": round(feels) if feels is not None else None,
+        "code": current.get("weather_code"),
+        "is_day": bool(current.get("is_day", 1)),
         "units": "°F" if data.get("units") == "imperial" else "°",
         "headline": headline["text"] if headline else None,
         "hourly": _hourly_slice(data.get("hourly") or {}, now),
@@ -178,14 +182,21 @@ def _hourly_slice(hourly, now, hours=12):
     times = hourly.get("time") or []
     temps = hourly.get("temperature_2m") or []
     precip = hourly.get("precipitation_probability") or []
+    codes = hourly.get("weather_code") or []
     out = []
     for i, stamp in enumerate(times):
         at = feeds._parse_local(stamp)
         if not at or at < now.replace(minute=0, second=0, microsecond=0):
             continue
-        out.append({"at": at.strftime("%H"),
-                    "temp": round(temps[i]) if i < len(temps) and temps[i] is not None else None,
-                    "rain": precip[i] if i < len(precip) else None})
+        out.append({
+            "at": at.strftime("%H"),
+            "temp": round(temps[i]) if i < len(temps) and temps[i] is not None else None,
+            "rain": precip[i] if i < len(precip) else None,
+            "code": codes[i] if i < len(codes) else None,
+            # Icons differ between day and night for clear skies, the same way
+            # a phone shows a moon after sunset.
+            "is_day": 6 <= at.hour < 21,
+        })
         if len(out) >= hours:
             break
     return out
@@ -195,9 +206,11 @@ def _tomorrow(daily):
     mins, maxs = daily.get("temperature_2m_min") or [], daily.get("temperature_2m_max") or []
     if len(mins) < 2 or len(maxs) < 2:
         return None
+    codes = daily.get("weather_code") or []
     return {"min": round(mins[1]) if mins[1] is not None else None,
             "max": round(maxs[1]) if maxs[1] is not None else None,
-            "rain": (daily.get("precipitation_probability_max") or [None, None])[1]}
+            "rain": (daily.get("precipitation_probability_max") or [None, None])[1],
+            "code": codes[1] if len(codes) > 1 else None}
 
 
 # ---------------------------------------------------------------------------

@@ -485,12 +485,33 @@ alone, its HAFAS backend was shut off permanently, and its data endpoints were
 returning 503 during development — a `db-rest` provider is still included
 behind the same interface and selectable with `transit_provider`.
 
-**Wetter** uses Open-Meteo, no key. It shows one actionable line, not a
-seven-day grid — those are not read on a wall.
+**Wetter** uses Open-Meteo, no key. FAR shows one actionable line; NEAR is laid
+out the way a phone does it — temperature, the one thing that matters, the
+condition as a symbol, then the coming hours. Symbols are inline SVG mapped
+from the WMO weather codes, with a moon instead of a sun after dark. Nothing is
+fetched, so they still render when the Pi has no internet.
+
+Still not a seven-day grid: those are not read on a wall.
 
 **Fahrzeit** reuses the same MOTIS instance for routing, so it needs no second
 service. It is transit time; there is no car routing. Events without a
 parseable address are skipped silently.
+
+### Layout
+
+NEAR groups each region onto its own card. FAR stays frameless — from four
+metres a border is just a line, and the clock needs the room more than the
+grouping does.
+
+Cards share the rail and grow into whatever space is free, so a widget
+withdrawing does not leave a hole behind it. The collapse is animated rather
+than instant: the height runs to zero over `--reflow` and the neighbours
+expand as it does.
+
+The Abfall card is the exception to the quiet-by-default rule. It only appears
+in a narrow window around collection day, and its whole job is to be seen on
+the way past, so it takes the top of the rail and carries the fraction's own
+colour.
 
 ### Failure behaviour
 

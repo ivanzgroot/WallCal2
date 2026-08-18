@@ -232,8 +232,10 @@ def weather(settings=None):
     def fetch():
         return _get("https://api.open-meteo.com/v1/forecast", {
             "latitude": lat, "longitude": lon,
-            "current": "temperature_2m,precipitation,weather_code,wind_speed_10m",
-            "hourly": "temperature_2m,precipitation_probability,precipitation",
+            "current": "temperature_2m,apparent_temperature,precipitation,"
+                       "weather_code,wind_speed_10m,is_day",
+            "hourly": "temperature_2m,precipitation_probability,precipitation,"
+                      "weather_code",
             "daily": "temperature_2m_min,temperature_2m_max,"
                      "precipitation_probability_max,weather_code",
             "timezone": tz if tz and tz != "auto" else "auto",
