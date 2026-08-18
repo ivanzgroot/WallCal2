@@ -956,7 +956,19 @@ class PresenceDaemon:
             return
 
         distance = self._last_reading.get("distance_cm")
-        empty = not self._present or not distance or distance <= 0
+
+        # Deliberately not self._present. That flag answers "should the panel
+        # wake?", which is gated on signal energy so a marginal reading cannot
+        # switch the display on. Density asks a different question — "how far
+        # away is whoever is there?" — and the radar knows the distance even
+        # when the energy is too weak to justify a wake.
+        #
+        # Tying the two together meant somebody standing still in front of the
+        # wall, reading it, dropped below the stationary energy gate and threw
+        # the layout back to FAR while they were right there.
+        target_state = self._last_reading.get("target_state", 0)
+        empty = (not distance or distance <= 0
+                 or target_state == ld2410.TARGET_NONE)
 
         target = None
         if empty:

@@ -53,7 +53,10 @@ def feed(d, clock, distances, present=True, step_ms=100):
     """One radar frame per step, at the sensor's real ~10 Hz."""
     out = []
     for cm in distances:
-        d._last_reading = {"distance_cm": cm, "source": "uart"}
+        # A radar-shaped reading: no target when the distance is zero, which
+        # is what an empty room actually looks like on the wire.
+        d._last_reading = {"distance_cm": cm, "source": "uart",
+                           "target_state": 1 if cm else 0}
         d._present = present and bool(cm)
         clock.advance(step_ms)
         d._update_density()
@@ -63,7 +66,8 @@ def feed(d, clock, distances, present=True, step_ms=100):
 
 def commit_ms(d, clock, distances, want, step_ms=100):
     for i, cm in enumerate(distances):
-        d._last_reading = {"distance_cm": cm, "source": "uart"}
+        d._last_reading = {"distance_cm": cm, "source": "uart",
+                           "target_state": 1 if cm else 0}
         d._present = bool(cm)
         clock.advance(step_ms)
         d._update_density()
@@ -132,6 +136,44 @@ d._last_reading = {"distance_cm": None}
 check("no distance source disables auto", d._density_enabled(), False)
 d = daemon(density_near_cm="260")
 check("band too narrow disables auto", d._density_enabled(), False)
+
+# ---------------------------------------------------------------------------
+# Driving _evaluate() with radar-shaped frames rather than setting _present by
+# hand. Bypassing it is what let the real bug through: density was keyed off
+# the wake decision, so a weak stationary signal threw the layout back to FAR
+# while somebody was standing right in front of the wall reading it.
+# ---------------------------------------------------------------------------
+
+def frame(state, mv_cm=0, mv_e=0, st_cm=0, st_e=0):
+    candidates = [x for x in (mv_cm if state in (1, 3) else 0,
+                              st_cm if state in (2, 3) else 0) if x]
+    return {"source": "uart", "target_state": state,
+            "moving_distance_cm": mv_cm, "moving_energy": mv_e,
+            "stationary_distance_cm": st_cm, "stationary_energy": st_e,
+            "distance_cm": min(candidates) if candidates else 0}
+
+
+def radar(d, clock, reading, ticks=20, step_ms=100):
+    for _ in range(ticks):
+        clock.advance(step_ms)
+        d._last_reading = reading
+        d._evaluate(reading)
+        d._update_density()
+    return d._density
+
+
+print("")
+print("G. real radar frames, through the presence evaluator")
+d = daemon(presence_confirm_ms="300", sensor_stationary_energy_min="25")
+check("moving, far away", radar(d, clock, frame(1, mv_cm=250, mv_e=60)), "far")
+check("moving, close", radar(d, clock, frame(1, mv_cm=80, mv_e=70)), "near")
+check("standing still, good signal",
+      radar(d, clock, frame(2, st_cm=80, st_e=40)), "near")
+# The regression: energy below the wake gate must not move the layout.
+check("standing still, signal under the wake gate",
+      radar(d, clock, frame(2, st_cm=80, st_e=20)), "near")
+check("presence itself still says no", d._present, False)
+check("target gone entirely", radar(d, clock, frame(0)), "far")
 
 print("")
 print("ALL PASS" if not fails else "%d FAILED: %s" % (len(fails), fails))

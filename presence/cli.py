@@ -608,6 +608,57 @@ def cmd_display_strategy(args) -> int:
     return 0
 
 
+def cmd_presence_density(args) -> int:
+    """Watch the near/far decision live, so it can be checked by walking up.
+
+    Prints one line per state-file update: the distance the radar reports,
+    whether the wake gate is satisfied, and which layout the daemon has
+    settled on. The gate and the layout are deliberately separate — a weak
+    stationary signal should not move the layout for somebody standing still.
+    """
+    s = database.get_all_settings()
+    near = int(float(s.get("density_near_cm", 100)))
+    far = int(float(s.get("density_far_cm", 140)))
+    print(bold("Density"))
+    print(f"  mode {s.get('density_mode')}   near <= {near} cm   far >= {far} cm")
+    print(dim("  walk towards the panel and back; ctrl-c to stop"))
+    print()
+    print(f"  {'dist':>6}  {'gate':<6} {'layout':<7} meter")
+
+    width = 40
+    scale = 400.0
+    last = None
+    try:
+        while True:
+            state = runtime.read_state()
+            if not state.get("daemon_running"):
+                print(red("  presence daemon is not running"))
+                return 1
+            reading = state.get("reading") or {}
+            distance = reading.get("distance_cm")
+            layout = state.get("density", "?")
+            gate = "yes" if state.get("present") else "no"
+
+            filled = 0 if not distance else min(width, int(distance / scale * width))
+            bar = ["·"] * width
+            for i in range(filled):
+                bar[i] = "█"
+            for mark, cm in ((("n"), near), (("f"), far)):
+                pos = min(width - 1, int(cm / scale * width))
+                if bar[pos] == "·":
+                    bar[pos] = mark
+            line = (f"  {str(distance or 0):>6}  {gate:<6} "
+                    f"{(green(layout) if layout == 'near' else cyan(layout)):<7} "
+                    f"{''.join(bar)}")
+            if line != last:
+                print(line)
+                last = line
+            time.sleep(0.2)
+    except KeyboardInterrupt:
+        print()
+        return 0
+
+
 def cmd_display_autoselect(args) -> int:
     """Pin the best available backend, rather than leaving it to chance.
 
@@ -891,6 +942,9 @@ def build_parser() -> argparse.ArgumentParser:
     p = pres_sub.add_parser("override", help="force the display on/off")
     p.add_argument("mode", choices=["auto", "on", "off"])
     p.set_defaults(func=cmd_presence_override)
+
+    pres_sub.add_parser("density", help="watch the near/far decision live"
+                        ).set_defaults(func=cmd_presence_density)
 
     p = pres_sub.add_parser("wake", help="keep the display on for a while")
     p.add_argument("seconds", type=float, nargs="?", default=300)

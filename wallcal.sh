@@ -1548,9 +1548,10 @@ cmd_presence() {
     on|off|auto)  pcli presence override "$action" ;;
     wake)         pcli presence wake "${1:-300}" ;;
     rescan)       pcli presence rescan ;;
+    density)      pcli presence density ;;
     distance)     pcli settings set "sensor_distance_max_cm=${1:?usage: presence distance <cm>}" ;;
     timeout)      pcli settings set "display_off_timeout=${1:?usage: presence timeout <seconds>}" ;;
-    *) die "usage: wallcal.sh presence {status|on|off|auto|wake|rescan|distance|timeout}" ;;
+    *) die "usage: wallcal.sh presence {status|on|off|auto|wake|rescan|distance|timeout|density}" ;;
   esac
 }
 
@@ -2117,7 +2118,7 @@ _wallcal() {
     kiosk)    COMPREPLY=($(compgen -W "start stop restart status logs gpu diagnose" -- "$cur")); return ;;
     display)  COMPREPLY=($(compgen -W "detect autoselect status on off toggle test rotate backend output strategy pwm brightness" -- "$cur")); return ;;
     sensor)   COMPREPLY=($(compgen -W "status scan monitor params gates sensitivity calibrate reset" -- "$cur")); return ;;
-    presence) COMPREPLY=($(compgen -W "status on off auto wake rescan distance timeout" -- "$cur")); return ;;
+    presence) COMPREPLY=($(compgen -W "status on off auto wake rescan distance timeout density" -- "$cur")); return ;;
     config)   COMPREPLY=($(compgen -W "list get set edit" -- "$cur")); return ;;
     logs)     COMPREPLY=($(compgen -W "web presence kiosk all -f -n" -- "$cur")); return ;;
   esac

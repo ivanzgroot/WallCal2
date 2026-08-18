@@ -518,15 +518,12 @@ def get_prewake():
 
 @app.route("/api/presence/live")
 def get_presence_live():
-    """Just the fields the wall display polls twice a second.
+    """The same fields /api/presence/stream pushes, as a plain request.
 
-    Density switching needs sub-second latency, and /api/presence returns the
-    full sensor telemetry — several kB of radar frame that nothing on the wall
-    reads. This is the same tmpfs file filtered to about 100 bytes.
-
-    Deliberately polling rather than SSE: this app runs Flask's own server
-    with no gunicorn or gevent behind it, so an event stream held open for
-    months would pin a worker thread on a Pi 3B+ for the entire uptime.
+    The wall uses the stream; this is its fallback for when the stream will
+    not open or has dropped. /api/presence returns the full sensor telemetry —
+    several kB of radar frame that nothing on the wall reads — so this is the
+    same tmpfs file filtered down to about 100 bytes.
     """
     state = presence_runtime.read_state()
     reading = state.get("reading") or {}
