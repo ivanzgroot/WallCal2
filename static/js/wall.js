@@ -807,24 +807,38 @@ function renderAbfall() {
 
 // --- QR companion ----------------------------------------------------
 function renderQr(q) {
+    state.qr = q || null;
+    // Build the image as soon as its size is known, whether or not it is on
+    // screen yet. Creating it lazily meant the first time you walked up you
+    // waited for a request and a render before anything appeared.
+    if (q && q.size) ensureQrImage(q.size);
+    updateQrVisibility();
+}
+
+function ensureQrImage(size) {
     var host = $('qrBox');
+    if (host.getAttribute('data-size') === String(size)) return;
+    host.setAttribute('data-size', String(size));
+    host.style.width = size + 'px';
+    host.style.height = size + 'px';
+    host.innerHTML = '';
+    var img = document.createElement('img');
+    img.src = '/api/qr.svg?size=' + size;
+    img.alt = 'Einstellungen';
+    img.width = size;
+    img.height = size;
+    host.appendChild(img);
+}
+
+/** Cheap enough to call on every density change, which is the point: the QR
+ *  is the one widget whose visibility depends on how far away you are. */
+function updateQrVisibility() {
+    var host = $('qrBox');
+    var q = state.qr;
     if (!q || !q.visible) { host.hidden = true; return; }
     // dynamic means NEAR only: a QR code is useless from across the room.
     var density = $('app').getAttribute('data-density');
-    if (q.mode === 'dynamic' && density !== 'near') { host.hidden = true; return; }
-    host.hidden = false;
-    var size = q.size || 96;
-    if (host.getAttribute('data-size') !== String(size)) {
-        host.setAttribute('data-size', String(size));
-        host.style.width = size + 'px';
-        host.style.height = size + 'px';
-        host.innerHTML = '';
-        var img = document.createElement('img');
-        img.src = '/api/qr.svg?size=' + size;
-        img.alt = 'Einstellungen';
-        img.width = size; img.height = size;
-        host.appendChild(img);
-    }
+    host.hidden = (q.mode === 'dynamic' && density !== 'near');
 }
 
 // ===============================================================
@@ -897,6 +911,10 @@ function setDensity(which) {
     if (which !== 'near' && which !== 'far') return;
     if (app.getAttribute('data-density') === which) return;
     app.setAttribute('data-density', which);
+    // Anything whose visibility follows the density has to hear about it now.
+    // Waiting for the next widget poll meant the QR appeared up to thirty
+    // seconds after somebody had already walked up to scan it.
+    updateQrVisibility();
 }
 
 // ===============================================================

@@ -166,5 +166,37 @@ check("uses the fraction colour", "--fraction" in css, True)
 check("has its own card style", ".box.abfall" in css, True)
 
 print("")
+
+
+print("")
+print("QR reacts to the density, not to the widget poll")
+ctx.eval("__routes['/api/widgets'] = " + json.dumps(dict(
+    WIDGETS, qr={"visible": True, "mode": "dynamic", "size": 96})) + ";")
+ctx.eval("document.getElementById('app').setAttribute('data-density','far');")
+ctx.eval("__tick(30000);")
+check("hidden while far away", hidden("qrBox"), True)
+
+# The image has to exist before it is needed: building it lazily meant the
+# first appearance also paid for a request and a Reed-Solomon encode.
+built = ctx.eval("document.getElementById('qrBox').children.length")
+check("image already built while hidden", built, 1)
+check("and points at the endpoint", ctx.eval(
+    "document.getElementById('qrBox').children[0].src"), "/api/qr.svg?size=96")
+
+# No widget poll in between — only the density changes.
+ctx.eval("__requests.length = 0;")
+ctx.eval("(function(){ __setDensityProbe(); })();")
+check("visible immediately on walking up", hidden("qrBox"), False)
+check("without waiting for a widget fetch", ctx.eval(
+    "__requests.filter(function(u){return u.indexOf('/api/widgets')===0;}).length"), 0)
+
+ctx.eval("__routes['/api/widgets'] = " + json.dumps(dict(
+    WIDGETS, qr={"visible": True, "mode": "always", "size": 96})) + ";")
+ctx.eval("__tick(30000);")
+ctx.eval("document.getElementById('app').setAttribute('data-density','far');")
+ctx.eval("(function(){ __setDensityProbe('far'); })();")
+check("always mode ignores the density", hidden("qrBox"), False)
+
+print("")
 print("ALL PASS" if not fails else "%d FAILED: %s" % (len(fails), fails))
 sys.exit(1 if fails else 0)

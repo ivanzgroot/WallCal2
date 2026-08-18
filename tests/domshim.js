@@ -145,3 +145,15 @@ __addDetails('widget_transit');
 __addDetails('widget_weather');
 __addDetails('widget_travel');
 __addDetails('widget_qr');
+
+
+// The wall's script is an IIFE, so the suite reaches setDensity the way the
+// daemon does: by delivering a live payload that carries a new density.
+function __setDensityProbe(which) {
+    __routes['/api/presence/live'] = {
+        daemon_running: true, display_on: true, display_mode: 'normal',
+        brightness: 100, brightness_source: 'css',
+        density: which || 'near'
+    };
+    __tick(2000);
+}

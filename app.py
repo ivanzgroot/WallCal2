@@ -433,6 +433,10 @@ def reset_sensor():
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
+#: Keyed on (url, size). Both are stable, so this is effectively permanent.
+_QR_CACHE = {}
+
+
 @app.route("/api/qr.svg")
 def qr_svg():
     """The companion QR code, as SVG so it scales without artefacts.
@@ -450,12 +454,27 @@ def qr_svg():
     except (TypeError, ValueError):
         size = 96
 
+    cached = _QR_CACHE.get((target, size))
+    if cached is not None:
+        return cached, 200, {
+            "Content-Type": "image/svg+xml",
+            "Cache-Control": "public, max-age=3600",
+        }
+
     code = segno.make(target, error="m")
     buf = io.BytesIO()
     # light=None leaves the background transparent, so the code sits on the
     # wall's own ground rather than in a white box.
     code.save(buf, kind="svg", scale=max(1, size // (code.symbol_size()[0] or 1)),
               dark="#7E8598", light=None, xmldecl=False, svgns=True)
+
+    # The target and size change about never, so encoding it once is enough.
+    # Reed-Solomon on a Pi 3B+ is not free, and this sits in the path of
+    # somebody who has just walked up.
+    if len(_QR_CACHE) > 8:
+        _QR_CACHE.clear()
+    _QR_CACHE[(target, size)] = buf.getvalue()
+
     return buf.getvalue(), 200, {
         "Content-Type": "image/svg+xml",
         "Cache-Control": "public, max-age=3600",
