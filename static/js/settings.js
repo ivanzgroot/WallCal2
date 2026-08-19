@@ -809,7 +809,10 @@ var windowEditor = (function () {
             String(bits[1] || '').split(',').forEach(function (range) {
                 var ends = range.split('-');
                 var a = minutesOf(ends[0]), b = minutesOf(ends[1]);
-                if (a === null || b === null || b <= a) return;
+                // b < a runs past midnight — a night bus, not a mistake.
+                // Dropping those here meant opening this page and touching
+                // an unrelated day silently deleted them from the config.
+                if (a === null || b === null || a === b) return;
                 out[day].push([a, b]);
             });
         });
@@ -850,16 +853,14 @@ var windowEditor = (function () {
                 var value = minutesOf(input.value);
                 if (value === null) { input.value = hhmmOf(range[which]); return; }
                 range[which] = value;
-                // The end cannot precede the start, so it gives way rather
-                // than being rejected — the same bargain the density
-                // sliders make. Half an hour is the smallest useful window.
-                if (range[1] <= range[0]) {
-                    if (which === 0) range[1] = Math.min(23 * 60 + 59, range[0] + 30);
-                    else range[0] = Math.max(0, range[1] - 30);
-                    draw();
-                    commit();
-                    return;
+                // An end before the start is allowed and labelled: that is
+                // how you say "until 02:00 the next day". Only a zero-length
+                // window means nothing at all, so that one gives way.
+                if (range[0] === range[1]) {
+                    if (which === 0) range[1] = (range[0] + 30) % 1440;
+                    else range[0] = (range[1] - 30 + 1440) % 1440;
                 }
+                draw();
                 commit();
             });
             return input;
@@ -871,6 +872,13 @@ var windowEditor = (function () {
         dash.textContent = '–';
         row.appendChild(dash);
         row.appendChild(timeInput(1));
+        if (range[1] < range[0]) {
+            var over = document.createElement('span');
+            over.className = 'win-overnight';
+            over.textContent = 'Folgetag';
+            over.title = 'Dieses Fenster läuft über Mitternacht';
+            row.appendChild(over);
+        }
         row.appendChild(button('icon-btn', '×', 'Zeitfenster entfernen', function () {
             model[day].splice(index, 1);
             draw();

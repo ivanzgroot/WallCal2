@@ -756,12 +756,19 @@ def scan_sensor():
     """Hunt for the radar across the serial ports and optionally save it."""
     data = request.get_json(force=True, silent=True) or {}
     try:
-        from presence import ld2410
-        # Keep this well inside the browser's request timeout: probe only the
-        # factory baud and the one common reflash. `wallcal.sh sensor scan`
-        # sweeps every rate when this is not enough.
-        port, baud, reading = ld2410.autodetect(
-            bauds=(256000, 115200), seconds=0.6)
+        from presence import calibration, ld2410
+        # Only one process can hold a UART, and in normal operation the daemon
+        # does. Every other tool that opens the port asks it to stand down
+        # first — the CLI's sensor commands, the reset endpoint, the
+        # calibration runner. This one went straight at the port and raced it,
+        # which looks like a scan that finds nothing on a wall whose sensor
+        # is working perfectly.
+        with calibration.sensor_access():
+            # Keep this well inside the browser's request timeout: probe only
+            # the factory baud and the one common reflash. `wallcal.sh sensor
+            # scan` sweeps every rate when this is not enough.
+            port, baud, reading = ld2410.autodetect(
+                bauds=(256000, 115200), seconds=0.6)
     except Exception as e:
         logger.error("Sensor scan failed: %s", e)
         return jsonify({"error": str(e)}), 500

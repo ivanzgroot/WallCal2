@@ -201,18 +201,40 @@ def _shape_departure(d, now, relative_below_min):
 
 
 def _in_any_window(spec, now):
-    """Per-weekday windows: 'mon=06:30-09:00,16:00-18:30|sat='."""
+    """Per-weekday windows: 'mon=06:30-09:00,16:00-18:30|sat='.
+
+    A window whose end is before its start runs past midnight — 22:00-02:00
+    is a night bus, not a mistake. Comparing it as a plain range makes it
+    match nothing at all, silently, which is how a departure board configured
+    for the last train comes to never appear. The daemon's quiet hours have
+    always read a wrapping window this way; this did not.
+
+    The wrapped tail belongs to the day the window *started* on, so a Monday
+    22:00-02:00 covers Tuesday 01:00 as well.
+    """
+    current = now.time()
     today = WEEKDAYS[now.weekday()]
+    yesterday = WEEKDAYS[(now.weekday() - 1) % 7]
+
     for part in str(spec or "").split("|"):
         day, _, ranges = part.partition("=")
-        if day.strip().lower() != today:
+        day = day.strip().lower()
+        if day not in (today, yesterday):
             continue
         for window in ranges.split(","):
             start, _, end = window.partition("-")
             a, b = _hhmm(start), _hhmm(end)
-            if a and b and a <= now.time() < b:
+            if a is None or b is None or a == b:
+                continue
+            if a < b:
+                # An ordinary window only counts on its own day.
+                if day == today and a <= current < b:
+                    return True
+            elif day == today:
+                if current >= a:              # the evening part
+                    return True
+            elif current < b:                 # yesterday's window, after midnight
                 return True
-        return False
     return False
 
 

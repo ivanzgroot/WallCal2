@@ -194,17 +194,33 @@ check("removing one takes it back out",
       "mon=16:00-18:30" in posts(ctx, "/api/settings")[-1]["transit_windows"], True)
 
 print("")
-print("An end before its start is corrected, not stored")
+print("A window running past midnight is kept, and says so")
+# 22:00-02:00 is a night bus. Rejecting it as reversed dropped it on parse,
+# so opening this page and touching an unrelated day silently deleted it.
+ctx = build(routes={"/api/settings": {
+    "transit_windows": "mon=22:00-02:00|tue=|wed=|thu=|fri=|sat=|sun=",
+    "widget_transit": "dynamic"}})
+check("it survives being loaded", ctx.eval(
+    "__all('windowEditor').filter(function(n){return n.className==='win-range';}).length"), 1)
+check("and is labelled as overnight", ctx.eval(
+    "__all('windowEditor').filter(function(n){"
+    "return n.className==='win-overnight';}).length"), 1)
+
+fire(ctx, "windowEditor", "Dienstag: Zeitfenster hinzufügen")
+flush(ctx)
+written = posts(ctx, "/api/settings")[-1]["transit_windows"]
+check("editing another day leaves it alone", "mon=22:00-02:00" in written, True)
+
+print("")
+print("A zero-length window is the only one corrected")
 ctx = build(routes={"/api/settings": {
     "transit_windows": "mon=08:00-09:00|tue=|wed=|thu=|fri=|sat=|sun=",
     "widget_transit": "dynamic"}})
-setval(ctx, "windowEditor", "bis", "07:00")
+setval(ctx, "windowEditor", "bis", "08:00")
 flush(ctx)
 written = posts(ctx, "/api/settings")[-1]["transit_windows"]
-check("the start gives way instead", "mon=06:30-07:00" in written, True)
-check("nothing reversed reaches the wall",
-      all("-" in r and r.split("-")[0] < r.split("-")[1]
-          for r in written.split("|")[0].split("=")[1].split(",")), True)
+monday = written.split("|")[0].split("=")[1]
+check("it does not stay empty", monday.split("-")[0] != monday.split("-")[1], True)
 
 print("")
 print("Montag auf Di–Fr übertragen")

@@ -434,6 +434,12 @@ input[type="range"]::-moz-range-thumb { width: 26px; height: 26px; border: none;
 }
 .win-range input[type="time"] { flex: 1 1 0; min-width: 0; }
 .win-range .dash { color: var(--type-lo); flex: none; }
+/* A window running past midnight is legitimate and easy to create by
+   accident, so it says which it is rather than looking like a typo. */
+.win-overnight {
+    flex: none; font-size: 11px; letter-spacing: 0.04em;
+    color: var(--alert); font-family: var(--mono);
+}
 
 /* A 44px target that does not read as a button until you need it. */
 .icon-btn {

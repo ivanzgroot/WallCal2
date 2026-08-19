@@ -161,5 +161,23 @@ stored = {ev["dtstart"][11:16] for ev in occurrences}
 check("by storing two different UTC times", sorted(stored), ["07:00", "08:00"])
 
 print("")
+print("A departure window may run past midnight")
+# The daemon's quiet hours have always read a wrapping window this way; the
+# ÖPNV windows compared them as a plain range instead, so 22:00-02:00 matched
+# nothing at all and the last-train board simply never appeared.
+NIGHT = "mon=22:00-02:00|tue=|wed=|thu=|fri=|sat=|sun="
+DAY = "mon=06:30-09:00,16:00-18:30|tue=|wed=|thu=|fri=|sat=|sun="
+for spec, when, want, label in [
+        (NIGHT, "2026-08-17T23:30", True, "Monday night, inside it"),
+        (NIGHT, "2026-08-18T01:00", True, "carries into Tuesday morning"),
+        (NIGHT, "2026-08-18T03:00", False, "and closes there"),
+        (NIGHT, "2026-08-17T21:59", False, "not before it opens"),
+        (NIGHT, "2026-08-18T23:30", False, "Tuesday night is not configured"),
+        (DAY, "2026-08-17T07:00", True, "an ordinary window still matches"),
+        (DAY, "2026-08-17T09:00", False, "and still ends"),
+        (DAY, "2026-08-18T07:00", False, "and stays on its own weekday")]:
+    check(label, widgets._in_any_window(spec, datetime.fromisoformat(when)), want)
+
+print("")
 print("ALL PASS" if not fails else f"FAILED: {fails}")
 sys.exit(1 if fails else 0)
