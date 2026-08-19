@@ -5,6 +5,7 @@ fails, and says nothing.
 """
 import json
 import pathlib
+import re
 import sys
 
 from py_mini_racer import MiniRacer
@@ -20,9 +21,71 @@ def check(label, got, want):
         fails.append(label)
 
 
+TAG = re.compile(r"<(input|select|textarea|div|span|button|p)\b([^>]*)>", re.I)
+ATTR = re.compile(r'([a-zA-Z0-9_:-]+)\s*=\s*"([^"]*)"')
+
+#: Attributes the page reads back off its own controls. Anything else is
+#: presentation the shim has no opinion about.
+CARRIED = ("id", "type", "min", "max", "step", "value", "placeholder")
+
+
+def template_nodes():
+    """Every control the settings template declares, as (id, tagName, attrs).
+
+    The shim has no HTML parser: it invents a node the first time something
+    asks for an id, with no attributes on it. That meant a slider's own
+    min/max, and every id-less value chip, simply did not exist — so tests
+    passed against code paths that never ran. Reading the real template keeps
+    the two from drifting, the same way test_import does.
+    """
+    html = (ROOT / "templates" / "settings.html").read_text(encoding="utf-8")
+    out, synthetic = [], 0
+    for tag in TAG.finditer(html):
+        attrs = dict(ATTR.findall(tag.group(2)))
+        interesting = ("id" in attrs or "data-setting" in attrs
+                       or "data-seg" in attrs or "data-value-for" in attrs
+                       or "data-needs" in attrs)
+        if not interesting:
+            continue
+        node_id = attrs.get("id")
+        if not node_id:
+            synthetic += 1
+            node_id = "auto-%d" % synthetic
+        keep = {k: v for k, v in attrs.items()
+                if k.startswith("data-") or k in CARRIED}
+        out.append((node_id, tag.group(1).upper(), keep))
+    return out
+
+
 def build(routes=None, status=None):
     ctx = MiniRacer()
     ctx.eval((ROOT / "tests" / "domshim.js").read_text(encoding="utf-8"))
+
+    for node_id, tag_name, attrs in template_nodes():
+        ctx.eval("(function(){var n=document.getElementById(%s);"
+                 "n.tagName=%s;%s})()" % (
+                     json.dumps(node_id), json.dumps(tag_name),
+                     "".join("n.setAttribute(%s,%s);" % (json.dumps(k), json.dumps(v))
+                             for k, v in attrs.items())))
+        if "type" in attrs:
+            ctx.eval("document.getElementById(%s).type=%s;"
+                     % (json.dumps(node_id), json.dumps(attrs["type"])))
+        if "value" in attrs:
+            ctx.eval("document.getElementById(%s).value=%s;"
+                     % (json.dumps(node_id), json.dumps(attrs["value"])))
+
+    # The three override buttons are the one thing the template writes as
+    # children rather than as addressable nodes.
+    ctx.eval("""(function(){
+        var seg = document.getElementById('overrideSeg');
+        seg.children = [];
+        ['auto','on','off'].forEach(function (mode) {
+            var b = document.createElement('button');
+            b.setAttribute('data-mode', mode);
+            b.textContent = mode;
+            seg.appendChild(b);
+        });
+    })()""")
     base = {
         "/api/settings": {"density_mode": "auto", "theme": "dark",
                           "sensor_distance_max_cm": "300", "density_near_cm": "100",
@@ -31,6 +94,7 @@ def build(routes=None, status=None):
         "/api/system": {}, "/api/status": {"feeds": []},
         "/api/prewake": {"next": None},
         "/api/presence/live": {"daemon_running": True, "distance_cm": 120},
+        "/api/presence/override": {"ok": True},
         "/api/sensor/calibrate/apply": {"ok": True,
             "updated": {"sensor_distance_max_cm": "180"}},
     }
@@ -79,6 +143,191 @@ ctx = build(routes={"/api/settings": {"widget_transit": "off", "theme": "dark"}}
 check("panel hidden", ctx.eval(
     "(function(){var n=0;__detailsNodes.forEach(function(d){if(d.getAttribute('data-needs')"
     "==='widget_transit'&&d.hidden)n++;});return n;})()"), 1)
+
+
+def posts(ctx, url):
+    """Every write to ``url``, decoded, in order."""
+    return [json.loads(p["body"]) for p in json.loads(ctx.eval(
+        "JSON.stringify(__posts.filter(function(p){return p.url==='" + url + "';}))"))
+        if p["body"]]
+
+
+def flush(ctx):
+    """Let the debounced writes actually go out."""
+    ctx.eval("__flush(400);")
+
+
+def fire(ctx, root, label, evt="click"):
+    return ctx.eval("__fire(__byLabel('%s', %s), '%s')" % (root, json.dumps(label), evt))
+
+
+def setval(ctx, root, label, value):
+    ctx.eval("(function(){var n=__byLabel('%s', %s); n.value=%s;"
+             "__fire(n,'change'); __fire(n,'input');})()"
+             % (root, json.dumps(label), json.dumps(value)))
+
+
+print("")
+print("Zeitfenster: a picker, not a syntax")
+ctx = build(routes={"/api/settings": {
+    "transit_windows": "mon=06:30-09:00,16:00-18:30|tue=|wed=|thu=|fri=|sat=|sun=",
+    "widget_transit": "dynamic"}})
+check("seven days, always", ctx.eval(
+    "document.getElementById('windowEditor').children.length"), 7)
+check("the empty days say so", ctx.eval(
+    "__all('windowEditor').filter(function(n){return n.textContent==="
+    "'wird nicht angezeigt';}).length"), 6)
+check("the summary counts days, not characters", ctx.eval(
+    "document.querySelector('[data-value-for=\"transit_windows\"]').textContent"),
+    "1 von 7 Tagen")
+
+fire(ctx, "windowEditor", "Dienstag: Zeitfenster hinzufügen")
+flush(ctx)
+written = posts(ctx, "/api/settings")[-1]["transit_windows"]
+check("adding a window writes a parseable day", "tue=07:00-09:00" in written, True)
+check("and leaves the other days alone", "mon=06:30-09:00,16:00-18:30" in written, True)
+
+fire(ctx, "windowEditor", "Zeitfenster entfernen")
+flush(ctx)
+check("removing one takes it back out",
+      "mon=16:30-18:30" in posts(ctx, "/api/settings")[-1]["transit_windows"] or
+      "mon=16:00-18:30" in posts(ctx, "/api/settings")[-1]["transit_windows"], True)
+
+print("")
+print("An end before its start is corrected, not stored")
+ctx = build(routes={"/api/settings": {
+    "transit_windows": "mon=08:00-09:00|tue=|wed=|thu=|fri=|sat=|sun=",
+    "widget_transit": "dynamic"}})
+setval(ctx, "windowEditor", "bis", "07:00")
+flush(ctx)
+written = posts(ctx, "/api/settings")[-1]["transit_windows"]
+check("the start gives way instead", "mon=06:30-07:00" in written, True)
+check("nothing reversed reaches the wall",
+      all("-" in r and r.split("-")[0] < r.split("-")[1]
+          for r in written.split("|")[0].split("=")[1].split(",")), True)
+
+print("")
+print("Montag auf Di–Fr übertragen")
+ctx = build(routes={"/api/settings": {
+    "transit_windows": "mon=06:30-09:00|tue=|wed=|thu=|fri=|sat=|sun=",
+    "widget_transit": "dynamic"}})
+click(ctx, "windowCopy")
+flush(ctx)
+written = posts(ctx, "/api/settings")[-1]["transit_windows"]
+check("weekdays match Monday",
+      all(d + "=06:30-09:00" in written for d in ("mon", "tue", "wed", "thu", "fri")), True)
+check("the weekend is left alone", "sat=|sun=" in written, True)
+
+print("")
+print("Fraktionen: a colour and two words")
+ctx = build(routes={"/api/settings": {
+    "abfall_fractions": "rest=Restmüll:#8A8F9C|bio=Bio:#6FAE3F"}})
+check("one row per fraction", ctx.eval(
+    "document.getElementById('fractionEditor').children.length"), 2)
+check("counted in the summary", ctx.eval(
+    "document.querySelector('[data-value-for=\"abfall_fractions\"]').textContent"),
+    "2 Tonnen")
+
+# The delimiters of the stored format cannot be typed into it any more.
+setval(ctx, "fractionEditor", "Anzeigename", "Gelber:Sack|Rest")
+flush(ctx)
+written = posts(ctx, "/api/settings")[-1]["abfall_fractions"]
+check("delimiters are stripped as you type", "GelberSackRest" in written, True)
+check("so the format still parses", len(written.split("|")), 2)
+
+click(ctx, "fractionAdd")
+check("a new row appears", ctx.eval(
+    "document.getElementById('fractionEditor').children.length"), 3)
+before = len(posts(ctx, "/api/settings"))
+flush(ctx)
+check("but an empty one is not written yet",
+      len(posts(ctx, "/api/settings")), before)
+
+print("")
+print("The density thresholds move together")
+ctx = build(routes={"/api/settings": {
+    "density_mode": "auto", "density_near_cm": "100", "density_far_cm": "140",
+    "sensor_distance_max_cm": "300"}})
+ctx.eval("(function(){var n=document.getElementById('setNearCm');"
+         "n.value='200'; __fire(n,'input');})()")
+flush(ctx)
+written = posts(ctx, "/api/settings")[-1]
+check("pushing near past far moves far too", written.get("density_far_cm"), "220")
+check("near lands where it was dragged", written.get("density_near_cm"), "200")
+check("and it is one write, not two", len(written), 2)
+
+ctx.eval("(function(){var f=document.getElementById('setFarCm');"
+         "f.value='40'; __fire(f,'input');})()")
+flush(ctx)
+written = posts(ctx, "/api/settings")[-1]
+check("dragging far below near pushes near down",
+      float(written["density_near_cm"]) <= float(written["density_far_cm"]) - 20, True)
+check("and both stay inside their own range",
+      float(written["density_near_cm"]) >= 30, True)
+
+print("")
+print("Abschaltmethode: four known values, not a spelling test")
+ctx = build(routes={"/api/settings": {"display_off_strategy": "hdmi"}})
+check("one row per strategy", ctx.eval(
+    "document.getElementById('strategyPicker').children.length"), 4)
+ctx.eval("(function(){var n=__all('strategyPicker').filter(function(x){"
+         "return x.value==='pwm';})[0]; n.checked=true; __fire(n,'change');})()")
+flush(ctx)
+check("combining keeps the daemon's own order",
+      posts(ctx, "/api/settings")[-1]["display_off_strategy"], "hdmi,pwm")
+
+ctx.eval("(function(){var n=__all('strategyPicker').filter(function(x){"
+         "return x.value==='none';})[0]; n.checked=true; __fire(n,'change');})()")
+flush(ctx)
+check("never-off displaces the rest",
+      posts(ctx, "/api/settings")[-1]["display_off_strategy"], "none")
+check("and says what that means", "Bildschirm bleibt an" in
+      ctx.eval("document.getElementById('strategyNote').textContent"), True)
+
+ctx = build(routes={"/api/settings": {"display_off_strategy": "hdmi"}})
+before = len(posts(ctx, "/api/settings"))
+ctx.eval("(function(){var n=__all('strategyPicker').filter(function(x){"
+         "return x.value==='hdmi';})[0]; n.checked=false; __fire(n,'change');})()")
+flush(ctx)
+check("emptying it is refused rather than guessed at",
+      len(posts(ctx, "/api/settings")), before)
+
+print("")
+print("The manual override is readable, not just settable")
+ctx = build(routes={"/api/presence/live": {
+    "daemon_running": True, "distance_cm": 120, "override": "on"}})
+check("the wall's own state paints the buttons", ctx.eval(
+    "__all('overrideSeg').filter(function(b){return b.getAttribute('aria-checked')"
+    "==='true';}).map(function(b){return b.getAttribute('data-mode');}).join()"), "on")
+check("stated in words too", ctx.eval(
+    "document.getElementById('overrideValue').textContent"), "immer an")
+check("and carried above the fold", ctx.eval(
+    "document.getElementById('overrideBanner').hidden"), False)
+check("with the way out on it",
+      "Automatik" in text(ctx, "overrideBanner"), True)
+
+ctx.eval("(function(){var b=__all('overrideBanner').filter(function(n){"
+         "return n.textContent==='Automatik zurück';})[0]; __fire(b,'click');})()")
+check("which posts auto", posts(ctx, "/api/presence/override")[-1], {"mode": "auto"})
+check("and the banner goes", ctx.eval(
+    "document.getElementById('overrideBanner').hidden"), True)
+
+ctx = build()
+check("nothing shouted when the sensor is in charge", ctx.eval(
+    "document.getElementById('overrideBanner').hidden"), True)
+
+print("")
+print("A refused write puts the page back")
+ctx = build(status={"POST /api/settings": 500},
+            routes={"/api/settings": {"brightness": "100", "density_mode": "auto",
+                                      "density_near_cm": "100", "density_far_cm": "140"},
+                    "POST /api/settings": {"error": "Die Datenbank ist schreibgeschützt."}})
+ctx.eval("(function(){var n=document.getElementById('setBrightness');"
+         "n.value='35'; __fire(n,'input');})()")
+flush(ctx)
+check("the control returns to the wall's value", ctx.eval(
+    "document.getElementById('setBrightness').value"), "100")
+check("and says so", "nicht gespeichert" in text(ctx, "saveError"), True)
 
 print("")
 print("ALL PASS" if not fails else f"{len(fails)} FAILED: {fails}")

@@ -9,10 +9,12 @@ var __status = {};
 var __handlers = {};
 var __detailsNodes = [];
 var __requests = [];
+var __posts = [];
 
 function __node(id) {
     var node = {
-        id: id, _attrs: {}, _cls: {}, style: { setProperty: function (k, v) { this[k] = v; } },
+        id: id, _attrs: {}, _cls: {}, _on: {},
+        style: { setProperty: function (k, v) { this[k] = v; } },
         tagName: 'DIV', hidden: false, textContent: '', value: '',
         checked: false, dataset: {}, children: [],
         getAttribute: function (k) { return (k in this._attrs) ? this._attrs[k] : null; },
@@ -20,6 +22,10 @@ function __node(id) {
         removeAttribute: function (k) { delete this._attrs[k]; },
         appendChild: function (c) { this.children.push(c); return c; },
         addEventListener: function (evt, fn) {
+            // Per node as well as per id: the settings page builds its
+            // editors out of elements that never get an id, and a handler
+            // filed only under '' cannot be told apart from any other.
+            (this._on[evt] = this._on[evt] || []).push(fn);
             if (evt !== 'click' && evt !== 'change' && evt !== 'input') return;
             (__handlers[this.id] = __handlers[this.id] || []).push(fn);
         },
@@ -69,6 +75,16 @@ var document = {
             return Object.keys(__nodes).map(function (k) { return __nodes[k]; })
                 .filter(function (n) { return n.getAttribute('data-' + m[1]) === m[2]; });
         }
+        // '#overrideSeg button' — declared in the template, so the harness
+        // has to put them there before the page can paint them.
+        var kids = /^#([A-Za-z0-9_-]+)\s+([a-z]+)$/.exec(sel);
+        if (kids) {
+            var host = __nodes[kids[1]];
+            if (!host) return [];
+            return (host.children || []).filter(function (n) {
+                return n.tagName === kids[2].toUpperCase();
+            });
+        }
         if (sel.indexOf('.more[data-needs]') === 0) return __detailsNodes;
         if (sel.indexOf('[data-setting]') === 0)
             return Object.keys(__nodes).map(function (k) { return __nodes[k]; })
@@ -112,14 +128,25 @@ function clearTimeout(i) { clearInterval(i); }
 function __liveTimers() { return __timers.filter(function (t) { return t.live; }); }
 
 function XMLHttpRequest() {
-    this.open = function (m, u) { this._u = u; };
+    this.open = function (m, u) { this._m = m; this._u = u; };
     this.setRequestHeader = function () {};
-    this.send = function () {
+    this.send = function (body) {
         __requests.push(this._u);
-        var key = Object.keys(__routes).filter(function (k) {
-            return this._u.indexOf(k) === 0;
-        }, this)[0];
-        this.status = __status[this._u] !== undefined ? __status[this._u] : (key ? 200 : 404);
+        // What was written, not just where: a settings page is judged on
+        // whether one gesture produces one coherent write.
+        __posts.push({ url: this._u, body: body || null });
+
+        // A route or status may be qualified by method — "POST /api/settings"
+        // — because reading a setting and being refused when writing it is a
+        // real pair of answers, not one.
+        var qualified = this._m + ' ' + this._u;
+        var key = __routes[qualified] !== undefined ? qualified
+                : Object.keys(__routes).filter(function (k) {
+                      return k.indexOf(' ') < 0 && this._u.indexOf(k) === 0;
+                  }, this)[0];
+        this.status = __status[qualified] !== undefined ? __status[qualified]
+                    : (__status[this._u] !== undefined ? __status[this._u]
+                                                       : (key ? 200 : 404));
         this.responseText = key ? JSON.stringify(__routes[key]) : '{}';
         if (this.onload) this.onload();
     };
@@ -132,6 +159,40 @@ function __tick(ms) {
                   .forEach(function (t) { t.fn(); });
 }
 function __tickAll() { __liveTimers().forEach(function (t) { t.fn(); }); }
+
+/** Run pending setTimeout callbacks — the settings page debounces its
+ *  writes, so nothing reaches the wall until these fire. */
+function __flush(ms) {
+    var due = __liveTimers().filter(function (t) {
+        return t.kind === 'timeout' && (ms === undefined || t.ms === ms);
+    });
+    due.forEach(function (t) { t.live = false; t.fn(); });
+    return due.length;
+}
+
+/** Everything under a node, depth first. */
+function __all(rootId) {
+    var out = [];
+    (function walk(n) {
+        (n.children || []).forEach(function (c) { out.push(c); walk(c); });
+    })(document.getElementById(rootId));
+    return out;
+}
+
+/** Find a control the way a person would: by what it says it is. */
+function __byLabel(rootId, label) {
+    return __all(rootId).filter(function (n) {
+        return n.getAttribute('aria-label') === label;
+    })[0] || null;
+}
+
+function __fire(node, evt) {
+    if (!node || !node._on || !node._on[evt]) return 'NO HANDLER';
+    node._on[evt].forEach(function (f) {
+        f.call(node, { preventDefault: function () {}, target: node });
+    });
+    return 'fired';
+}
 function __density() { return document.getElementById('app').getAttribute('data-density'); }
 Date.now = function () { return __now; };
 
