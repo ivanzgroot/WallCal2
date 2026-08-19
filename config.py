@@ -112,7 +112,15 @@ DEFAULT_NEAR_VIEW = "fortnight"       # fortnight | month | agenda
 # "auto" enables it only when the usable FAR band — wake distance minus the
 # NEAR threshold — is wide enough to be worth switching across. A 20 cm band
 # is not a feature, it is a flicker.
-DEFAULT_DENSITY_MODE = "auto"         # off | on | auto
+# Every value names the layout you end up with, because "off" did not: it
+# disabled the switching and pinned the wall to NEAR, which is the opposite
+# of what half of people expect the word to mean.
+#   auto  switch, but only when the usable FAR band is wide enough
+#   on    switch regardless of the band
+#   near  never switch — always the close-up layout
+#   far   never switch — always the across-the-room layout
+# "off" is still accepted and means "near", which is what it always did.
+DEFAULT_DENSITY_MODE = "auto"         # auto | on | near | far
 DEFAULT_DENSITY_NEAR_CM = 100         # closer than this -> NEAR
 DEFAULT_DENSITY_FAR_CM = 140          # further than this -> back to FAR
 DEFAULT_DENSITY_MIN_BAND_CM = 80      # narrower than this and auto declines

@@ -176,5 +176,32 @@ check("presence itself still says no", d._present, False)
 check("target gone entirely", radar(d, clock, frame(0)), "far")
 
 print("")
+print("H. a pinned layout is a mode, not the absence of one")
+# "off" named the mechanism and hid the outcome: it stopped the switching and
+# left the wall in NEAR, which is not what the word suggests. Each mode now
+# names the layout you get, and the opposite choice is finally sayable.
+d = daemon(density_mode="near")
+feed(d, clock, [250] * 25)
+check("near stays near however far away you are", d._density, "near")
+feed(d, clock, [0] * 25)
+check("and through an empty room", d._density, "near")
+
+d = daemon(density_mode="far")
+feed(d, clock, [30] * 25)
+check("far stays far with somebody at the panel", d._density, "far")
+
+d = daemon(density_mode="off")
+d._update_density()
+check("off still means near, on the first tick", d._density, "near")
+feed(d, clock, [250] * 25)
+check("and keeps meaning it", d._density, "near")
+
+# A pinned layout must not wait on the radar: somebody who just chose it is
+# looking at the wall.
+d = daemon(density_mode="far")
+d._update_density()
+check("applies with no reading at all", d._density, "far")
+
+print("")
 print("ALL PASS" if not fails else "%d FAILED: %s" % (len(fails), fails))
 sys.exit(1 if fails else 0)

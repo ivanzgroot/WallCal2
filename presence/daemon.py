@@ -174,6 +174,21 @@ class Settings:
             g("screensaver_brightness"), config.DEFAULT_SCREENSAVER_BRIGHTNESS)))
 
     @property
+    def fixed_density(self):
+        """The layout the user pinned, or None to let the distance decide.
+
+        "off" is the old spelling of "near" and still resolves to it: it
+        disabled the switching, and disabling the switching has always left
+        the wall in the close-up layout.
+        """
+        mode = self.density_mode
+        if mode in ("near", "off"):
+            return "near"
+        if mode == "far":
+            return "far"
+        return None
+
+    @property
     def never_off(self) -> bool:
         """True when the panel never sleeps, so it needs something to show."""
         return "none" in [p.strip().lower()
@@ -937,7 +952,7 @@ class PresenceDaemon:
 
     def _density_enabled(self) -> bool:
         mode = self.settings.density_mode
-        if mode == "off":
+        if self.settings.fixed_density is not None:
             return False
         if mode == "on":
             return True
@@ -952,9 +967,20 @@ class PresenceDaemon:
         return band >= self.settings.density_min_band_cm
 
     def _update_density(self) -> None:
+        # An explicitly chosen layout applies at once and holds: nobody who
+        # asked for one view wants to wait for a radar frame to get it.
+        fixed = self.settings.fixed_density
+        if fixed is not None:
+            self._density_pending = None
+            if self._density != fixed:
+                self._density = fixed
+                self._write_state(force=True)
+            return
+
         if not self._density_enabled():
-            # NEAR is the safe fallback: it is the layout that still makes
-            # sense when somebody is standing right in front of the panel.
+            # Switching is on but unusable — no distance, or too narrow a
+            # band. NEAR is the safe fallback: it is the layout that still
+            # makes sense when somebody is standing right in front of it.
             self._density = "near" if self._last_reading else self._density
             self._density_pending = None
             return

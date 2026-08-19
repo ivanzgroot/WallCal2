@@ -279,6 +279,22 @@ def _m3_near_view(conn, fresh):
         _put_setting(conn, "locale", "en")
 
 
+@migration(4, "spell density_mode=off as what it actually did: near")
+def _m4_density_mode(conn, fresh):
+    """"off" disabled the near/far switching and pinned the wall to NEAR —
+    a name that told you what the feature was doing rather than what you
+    would see, which is the wrong half. The mode now names the layout, so
+    anyone carrying "off" keeps the behaviour under its real name and the
+    opposite choice becomes sayable.
+    """
+    if fresh:
+        return
+    row = conn.execute(
+        "SELECT value FROM settings WHERE key = 'density_mode'").fetchone()
+    if row and str(row["value"]).strip().lower() == "off":
+        _put_setting(conn, "density_mode", "near")
+
+
 @migration(2, "fold schedule_enabled into night_mode")
 def _m2_night_mode(conn, fresh):
     """Quiet hours grew a third option, so the boolean became a mode.

@@ -147,6 +147,7 @@ seconds without restarting anything.
 | **Release margin** | Extra distance tolerated before presence drops, so someone hovering at the edge of range does not make it flicker. |
 | **Confirm delay** | Presence must hold this long before waking — filters single-frame radar glitches. |
 | **Dim before off** | The panel drops to a dim level for a while before going dark, so you get a chance to move and cancel it. Set the duration to 0 to switch off outright. |
+| **Nah/Fern-Modus** | Every value names the layout you get: `auto` switches by distance when the usable band is wide enough, `on` always switches, `near` and `far` pin one layout. (`off` is the old spelling of `near` and still works.) |
 | **Quiet hours** | A window in which the display behaves normally. **Night mode** decides what happens outside it: nothing (`off`), presence wakes a dim clock only (`dim clock`), or the panel never wakes at all (`never wake`). |
 
 When the sensor is on UART, WallCal also programs the threshold into the
@@ -548,7 +549,7 @@ Everything is also reachable from the command line:
 
 | Setting group | Keys |
 |---|---|
-| Density | `density_mode` `density_near_cm` `density_far_cm` `density_min_band_cm` `density_enter_ms` `density_debounce_ms` `crossfade_ms` |
+| Density | `density_mode` (`auto` · `on` · `near` · `far`) `density_near_cm` `density_far_cm` `density_min_band_cm` `density_enter_ms` `density_debounce_ms` `crossfade_ms` |
 | Layout | `near_view` `drift_enabled` `timezone` `locale` `timeofday_*` |
 | Brightness | `brightness` `dim_seconds` `dim_level` `night_mode` `night_brightness` |
 | Screensaver | `screensaver_style` `screensaver_idle_seconds` `screensaver_brightness` |
