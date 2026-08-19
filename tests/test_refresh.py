@@ -37,15 +37,22 @@ def check(label, got, want):
 # Every provider reaches the network through this one helper, so replacing it
 # seals the whole module. Returning {} is a valid empty answer for all of them.
 calls = []
+# Shaped like Open-Meteo actually answers, including the hourly block. An
+# empty one made this suite pass over a loop that never ran — and that loop
+# compares its bare local stamps against a clock that carries an offset,
+# which Python refuses to do rather than guess.
+_FUTURE = "2099-08-19T"
 WEATHER = {
     "current": {"temperature_2m": 18.2, "apparent_temperature": 17.0,
                 "weather_code": 61, "is_day": 1, "precipitation": 0.4,
                 "wind_speed_10m": 12},
-    "hourly": {"time": [], "temperature_2m": [],
-               "precipitation_probability": [], "weather_code": []},
-    "daily": {"time": ["2026-08-19"], "temperature_2m_min": [12],
-              "temperature_2m_max": [21],
-              "precipitation_probability_max": [55], "weather_code": [61]},
+    "hourly": {"time": [_FUTURE + "13:00", _FUTURE + "14:00", _FUTURE + "15:00"],
+               "temperature_2m": [18, 19, 18],
+               "precipitation_probability": [5, 20, 75],
+               "weather_code": [2, 3, 63]},
+    "daily": {"time": ["2026-08-19", "2026-08-20"],
+              "temperature_2m_min": [12, 13], "temperature_2m_max": [21, 22],
+              "precipitation_probability_max": [55, 40], "weather_code": [61, 0]},
 }
 
 
@@ -99,6 +106,10 @@ check("station carried through", body["transit"].get("station"), "Regensburg Hbf
 # the fetching to a thread left them permanently invisible on the wall.
 check("weather rendered from the cache", body["weather"]["visible"], True)
 check("with a real reading in it", body["weather"]["temperature"] is not None, True)
+check("and the hourly strip survived the shaping",
+      len(body["weather"]["hourly"]), 3)
+check("with tomorrow alongside it",
+      (body["weather"]["tomorrow"] or {}).get("max"), 22)
 
 print("")
 print("A dark panel costs nobody's rate limit")

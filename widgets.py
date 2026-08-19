@@ -184,7 +184,9 @@ def _shape_departure(d, now, relative_below_min):
             when = when.replace(tzinfo=timezone.utc)
         reference = now.astimezone() if now.tzinfo is None else now
         minutes = int(round((when - reference).total_seconds() / 60.0))
-        local = when.astimezone()
+        # The wall's zone, not the machine's: a departure board printing
+        # 17:42 has to mean 17:42 to somebody standing in front of it.
+        local = localtime.to_local(when)
     return {
         "line": d.get("line", ""),
         "direction": d.get("direction", ""),
@@ -283,10 +285,16 @@ def _hourly_slice(hourly, now, hours=12):
     temps = hourly.get("temperature_2m") or []
     precip = hourly.get("precipitation_probability") or []
     codes = hourly.get("weather_code") or []
+    # Open-Meteo answers in the zone it was asked for, as bare local stamps
+    # with no offset. `now` carries one, and Python refuses to compare across
+    # that gap rather than guessing — so bring one side to the other.
+    floor = now.replace(minute=0, second=0, microsecond=0)
     out = []
     for i, stamp in enumerate(times):
         at = feeds._parse_local(stamp)
-        if not at or at < now.replace(minute=0, second=0, microsecond=0):
+        if not at:
+            continue
+        if at < (floor if at.tzinfo else floor.replace(tzinfo=None)):
             continue
         out.append({
             "at": at.strftime("%H"),
