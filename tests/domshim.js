@@ -86,18 +86,30 @@ var document = {
 var window = { location: { origin: 'http://wallcal.local:5005', host: 'wallcal.local:5005' },
                addEventListener: function () {} };
 var localStorage = {
-    _d: {},
+    _d: {}, _writes: 0,
     getItem: function (k) { return this._d[k] === undefined ? null : this._d[k]; },
-    setItem: function (k, v) { this._d[k] = String(v); }
+    // Counted: on the Pi this is backed by the SD card, so "did it write"
+    // is the thing worth asserting, not just "what does it hold".
+    setItem: function (k, v) { this._writes++; this._d[k] = String(v); }
 };
 var console = { log: function (m) { __log.push(String(m)); },
                 warn: function (m) { __log.push('WARN ' + m); },
                 error: function (m) { __log.push('ERR ' + m); } };
 
-function setInterval(fn, ms) { __timers.push({ fn: fn, ms: ms, kind: 'interval' }); return __timers.length; }
-function setTimeout(fn, ms) { __timers.push({ fn: fn, ms: ms, kind: 'timeout' }); return __timers.length; }
-function clearInterval(i) {}
-function clearTimeout(i) {}
+// Cancellation is modelled for real: the wall stops its timers while the
+// panel is dark, so a clearInterval that did nothing would let the suites
+// "pass" against work the browser is no longer doing.
+function setInterval(fn, ms) {
+    __timers.push({ fn: fn, ms: ms, kind: 'interval', live: true });
+    return __timers.length;
+}
+function setTimeout(fn, ms) {
+    __timers.push({ fn: fn, ms: ms, kind: 'timeout', live: true });
+    return __timers.length;
+}
+function clearInterval(i) { if (__timers[i - 1]) __timers[i - 1].live = false; }
+function clearTimeout(i) { clearInterval(i); }
+function __liveTimers() { return __timers.filter(function (t) { return t.live; }); }
 
 function XMLHttpRequest() {
     this.open = function (m, u) { this._u = u; };
@@ -116,10 +128,10 @@ function XMLHttpRequest() {
 // Drive one interval by its registered period.
 function __tick(ms) {
     __now += ms;
-    __timers.filter(function (t) { return t.kind === 'interval' && t.ms === ms; })
-            .forEach(function (t) { t.fn(); });
+    __liveTimers().filter(function (t) { return t.kind === 'interval' && t.ms === ms; })
+                  .forEach(function (t) { t.fn(); });
 }
-function __tickAll() { __timers.forEach(function (t) { t.fn(); }); }
+function __tickAll() { __liveTimers().forEach(function (t) { t.fn(); }); }
 function __density() { return document.getElementById('app').getAttribute('data-density'); }
 Date.now = function () { return __now; };
 

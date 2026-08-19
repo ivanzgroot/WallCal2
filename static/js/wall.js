@@ -18,8 +18,6 @@ var state = {
     viewMode: 'grid', // 'grid' or 'dots'
 };
 
-var pollTimer = null;
-var clockTimer = null;
 var countdownTimer = null;
 
 // ===============================================================
@@ -28,6 +26,18 @@ var countdownTimer = null;
 function $(id) { return document.getElementById(id); }
 function qs(sel) { return document.querySelector(sel); }
 function qsa(sel) { return document.querySelectorAll(sel); }
+
+/** A setting to a number, with a fallback.
+ *
+ *  Settings arrive from the API as strings and an unset one arrives as
+ *  undefined, both of which parseFloat answers with NaN. updateSyncStatus
+ *  called this and nothing defined it, so the staleness check threw a
+ *  ReferenceError every sixty seconds and the dot never lit.
+ */
+function num(value, fallback) {
+    var parsed = parseFloat(value);
+    return isFinite(parsed) ? parsed : fallback;
+}
 
 function parseUTC(dateStr) {
     if (!dateStr) return null;
@@ -468,8 +478,6 @@ function renderRail(today) {
 // A dashboard that reshuffles itself every time a bus becomes due looks
 // broken rather than clever.
 // ===============================================================
-var widgetTimer = null;
-
 function fetchWidgets() {
     apiGet('/api/widgets', function(err, data) {
         if (err || !data) return;      // keep whatever is on screen
@@ -931,6 +939,44 @@ var live = null;
 var livePollTimer = null;
 var lastDisplayOn = null;
 
+// ===============================================================
+// IDLE
+//
+// Everything below a dark panel is invisible work: a clock nobody
+// reads, a 1920px grid nobody sees, and two XHRs a minute on a Pi
+// that would rather be asleep. The panel is dark most of the day,
+// so this is the difference between an appliance and a space heater.
+//
+// The stream is never stopped — it is how we learn the panel is back.
+// ===============================================================
+var timers = { clock: null, events: null, widgets: null, sync: null };
+var timersRunning = false;
+
+function startTimers() {
+    if (timersRunning) return;
+    timersRunning = true;
+
+    // Whatever is on screen was painted before the panel went dark: catch
+    // the clock up now and make the next tick re-render rather than waiting
+    // for the minute to roll.
+    lastRenderedMinute = -1;
+    updateClock();
+    fetchWidgets();
+
+    timers.clock = setInterval(tick, 1000);
+    timers.events = setInterval(fetchEvents, 5 * 60 * 1000);
+    timers.widgets = setInterval(fetchWidgets, 30000);
+    timers.sync = setInterval(updateSyncStatus, 60000);
+}
+
+function stopTimers() {
+    if (!timersRunning) return;
+    timersRunning = false;
+    for (var key in timers) {
+        if (timers[key]) { clearInterval(timers[key]); timers[key] = null; }
+    }
+}
+
 function applyLive(data) {
     if (!data) return;
     state.presence = data;
@@ -943,6 +989,11 @@ function applyLive(data) {
         if (on === true || on === false) lastDisplayOn = on;
         applyPanelState(data);
         applyScreensaver(data);
+        if (on === false) stopTimers(); else startTimers();
+    } else {
+        // No daemon means nothing is driving the panel, so the wall has to
+        // keep working on its own rather than freeze mid-sleep.
+        startTimers();
     }
     setDensity(data.density);
 }
@@ -993,6 +1044,24 @@ function renderWall() {
     applyTimeOfDay(new Date());
 }
 
+var lastRenderedMinute = -1;
+
+/** The 1 Hz job: clock, and a re-render when the minute rolls over.
+ *
+ *  This used to be two timers, the second testing getSeconds() === 0. A
+ *  single late tick on a loaded Pi steps 59 -> 1 straight over the test, and
+ *  the fortnight then sits on yesterday's date until the next /events poll
+ *  repaints it. Comparing the minute itself cannot be stepped over.
+ */
+function tick() {
+    updateClock();
+    var minute = new Date().getMinutes();
+    if (minute !== lastRenderedMinute) {
+        lastRenderedMinute = minute;
+        renderWall();
+    }
+}
+
 function updateClock() {
     if (!fmt) buildFormatters();
     var now = new Date();
@@ -1008,6 +1077,8 @@ function updateClock() {
 // ===============================================================
 // DATA FETCHING
 // ===============================================================
+var lastStored = null;
+
 function fetchEvents() {
     apiGet('/events', function(err, data) {
         if (err) {
@@ -1020,6 +1091,7 @@ function fetchEvents() {
                     var parsed = JSON.parse(cached);
                     state.events = parsed.events || [];
                     state.lastPoll = parsed.last_poll;
+                    state.abfall = parsed.abfall || null;
                     renderWall();
                 } catch (e) {}
             }
@@ -1029,9 +1101,24 @@ function fetchEvents() {
 
         state.events = data.events || [];
         state.lastPoll = data.last_poll;
-        try { localStorage.setItem('wallcal_events', JSON.stringify(data)); } catch (e) {}
-        markStale(false);
         state.abfall = data.abfall || null;
+
+        // Chromium backs localStorage with the SD card. Storing `data` whole
+        // wrote the entire calendar to flash on every poll and could never
+        // dedupe: it carries a generated_at that differs by construction.
+        try {
+            var snapshot = JSON.stringify({
+                events: state.events,
+                last_poll: state.lastPoll,
+                abfall: state.abfall
+            });
+            if (snapshot !== lastStored) {
+                localStorage.setItem('wallcal_events', snapshot);
+                lastStored = snapshot;
+            }
+        } catch (e) {}
+
+        markStale(false);
         renderWall();
     });
 }
@@ -1111,23 +1198,16 @@ function applyPanelState(s) {
 
 function init() {
     updateClock();
-    clockTimer = setInterval(updateClock, 1000);
-    setInterval(updateSyncStatus, 60000);
 
     fetchSettings();
     fetchEvents();
-    pollTimer = setInterval(fetchEvents, 5 * 60 * 1000);
 
-    // Widgets have their own cadence: the server only refetches when a TTL
-    // has lapsed, and it skips the network entirely while the panel is dark.
-    fetchWidgets();
-    widgetTimer = setInterval(fetchWidgets, 30000);
-
-    // Re-render on the minute so the fortnight rolls over at midnight without
-    // waiting for the next CalDAV poll.
-    setInterval(function() {
-        if (new Date().getSeconds() === 0) renderWall();
-    }, 1000);
+    // The clock, the minute re-render, /events and the widgets all run from
+    // startTimers, which the live stream stops while the panel is dark and
+    // restarts when somebody walks up. Widgets have their own cadence on top:
+    // the server answers from cache, and a background thread does the
+    // fetching only while the panel is lit.
+    startTimers();
 
     // Panel state arrives pushed; nothing here polls for it.
     startLive();
