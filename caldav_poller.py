@@ -7,7 +7,6 @@ of calendars and recurring event expansion.
 
 import logging
 import threading
-import time
 from datetime import datetime, timedelta, date, timezone
 
 import caldav
@@ -75,11 +74,11 @@ class CalDAVPoller:
 
         while not self._stop_event.is_set():
             interval = int(database.get_setting("poll_interval_minutes", "5"))
-            # Sleep in small increments so we can stop quickly
-            for _ in range(interval * 60):
-                if self._stop_event.is_set():
-                    return
-                time.sleep(1)
+            # Event.wait returns the moment stop() fires, so one sleep is as
+            # interruptible as the 300 one-second sleeps this replaces — and
+            # it lets the Pi idle instead of waking once a second forever.
+            if self._stop_event.wait(interval * 60):
+                return
             self._poll_all()
 
     def _poll_all(self):
@@ -91,13 +90,22 @@ class CalDAVPoller:
             self._polling = False
             return
 
+        reached = 0
         for cal_cfg in calendars:
             try:
                 self._poll_calendar(cal_cfg)
+                reached += 1
             except Exception as e:
                 self._last_error = f"Calendar '{cal_cfg['name']}': {e}"
                 logger.error("Error polling calendar %s: %s",
                              cal_cfg["name"], e, exc_info=True)
+
+        # Only a cycle that actually reached a server counts. If every
+        # calendar errored, the recorded time stays put and the wall's
+        # staleness dot lights up, which is the behaviour that falls out of
+        # MAX(cached_at) today and the reason the wall trusts it.
+        if reached:
+            database.record_poll_time()
 
         self._last_poll = datetime.now(timezone.utc).isoformat()
         self._polling = False
@@ -159,8 +167,9 @@ class CalDAVPoller:
                         cal_cfg["name"])
             return
 
-        database.cache_events(cal_cfg["id"], events)
-        logger.debug("Fetched %d events from '%s'", len(events), cal_cfg["name"])
+        changed = database.cache_events(cal_cfg["id"], events)
+        logger.debug("Fetched %d events from '%s'%s", len(events),
+                     cal_cfg["name"], "" if changed else " (unchanged)")
 
     # ------------------------------------------------------------------
     # Event parsing

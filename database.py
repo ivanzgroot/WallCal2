@@ -620,35 +620,84 @@ def _calendar_row_to_dict(row):
 # Events cache
 # ---------------------------------------------------------------------------
 
+def _norm(value):
+    """One spelling for a cached column, so stored and incoming compare."""
+    return "" if value is None else str(value)
+
+
+def _event_shape(ev):
+    """The columns cache_events would write, in insert order."""
+    return (
+        _norm(ev.get("uid", "")),
+        _norm(ev.get("summary", "")),
+        _norm(ev.get("description", "")),
+        _norm(ev.get("location", "")),
+        _norm(ev.get("dtstart", "")),
+        _norm(ev.get("dtend", "")),
+        1 if ev.get("all_day") else 0,
+        _norm(ev.get("color", "#00d4aa")),
+        _norm(ev.get("recurrence_id", "")),
+    )
+
+
+def _incoming_shapes(events):
+    """What ``events`` would leave in the table, canonically ordered.
+
+    Collapsed by primary key keeping the last, because the write is an
+    INSERT OR REPLACE: a feed that repeats a uid stores one row, and a
+    fingerprint that counted two would never compare equal to it.
+    """
+    collapsed = {}
+    for ev in events:
+        shape = _event_shape(ev)
+        collapsed[(shape[0], shape[8])] = shape      # (uid, recurrence_id)
+    return sorted(collapsed.values())
+
+
+def _stored_shapes(conn, calendar_id):
+    rows = conn.execute("""
+        SELECT uid, summary, description, location, dtstart, dtend,
+               all_day, color, recurrence_id
+        FROM events_cache WHERE calendar_id = ?
+    """, (calendar_id,)).fetchall()
+    return sorted(
+        (_norm(r["uid"]), _norm(r["summary"]), _norm(r["description"]),
+         _norm(r["location"]), _norm(r["dtstart"]), _norm(r["dtend"]),
+         1 if r["all_day"] else 0, _norm(r["color"]),
+         _norm(r["recurrence_id"]))
+        for r in rows)
+
+
 def cache_events(calendar_id, events):
     """Replace cached events for a calendar with a fresh list.
 
     Each event dict should have: uid, summary, dtstart, dtend,
     all_day, description, location, color, recurrence_id (optional).
+
+    Returns True when the table was written. A calendar usually comes back
+    from a poll byte-identical, and a DELETE plus N INSERTs every five
+    minutes is 288 needless rewrites a day onto an SD card — the same wear
+    the tmpfs IPC exists to avoid. One SELECT is cheaper than any write.
     """
     with get_db() as conn:
+        incoming = _incoming_shapes(events)
+        if incoming == _stored_shapes(conn, calendar_id):
+            logger.debug("Calendar %d unchanged (%d events) — no write",
+                         calendar_id, len(incoming))
+            return False
+
         conn.execute(
             "DELETE FROM events_cache WHERE calendar_id = ?", (calendar_id,)
         )
-        for ev in events:
+        for shape in incoming:
             conn.execute("""
                 INSERT OR REPLACE INTO events_cache
                     (uid, calendar_id, summary, description, location,
                      dtstart, dtend, all_day, color, recurrence_id, cached_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
-            """, (
-                ev.get("uid", ""),
-                calendar_id,
-                ev.get("summary", ""),
-                ev.get("description", ""),
-                ev.get("location", ""),
-                ev.get("dtstart", ""),
-                ev.get("dtend", ""),
-                1 if ev.get("all_day") else 0,
-                ev.get("color", "#00d4aa"),
-                ev.get("recurrence_id", ""),
-            ))
-    logger.debug("Cached %d events for calendar %d", len(events), calendar_id)
+            """, (shape[0], calendar_id) + shape[1:])
+    logger.debug("Cached %d events for calendar %d", len(incoming), calendar_id)
+    return True
 
 
 def get_cached_events(days=30, exclude_calendar_ids=None):
@@ -663,6 +712,13 @@ def get_cached_events(days=30, exclude_calendar_ids=None):
 
     skip = {int(i) for i in (exclude_calendar_ids or []) if str(i).strip().isdigit()}
 
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    end_date = (datetime.now(timezone.utc) + timedelta(days=days)).strftime("%Y-%m-%d")
+
+    # Both queries on one connection. The second is not redundant: an all-day
+    # event whose dtend is a bare date sorts *below* a datetime of the same
+    # day ("2026-08-19" < "2026-08-19T14:00"), so the first query drops it and
+    # this one rescues it. The overlap is removed by the dedupe below.
     with get_db() as conn:
         rows = conn.execute("""
             SELECT e.*, c.name as calendar_name, c.color as calendar_color
@@ -674,10 +730,7 @@ def get_cached_events(days=30, exclude_calendar_ids=None):
             ORDER BY e.dtstart ASC
         """, (end, now)).fetchall()
 
-    # Also get all-day events that start today or later
-    with get_db() as conn:
-        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        end_date = (datetime.now(timezone.utc) + timedelta(days=days)).strftime("%Y-%m-%d")
+        # Also get all-day events that start today or later
         allday_rows = conn.execute("""
             SELECT e.*, c.name as calendar_name, c.color as calendar_color
             FROM events_cache e
@@ -829,9 +882,40 @@ def _age_seconds(stamp):
     return round((datetime.now(timezone.utc) - at).total_seconds(), 1)
 
 
-def get_last_poll_time():
-    """Get timestamp of most recent cache entry."""
+#: Stored in the settings table alongside schema_version — runtime state the
+#: API cannot write, since it is not in SETTABLE_KEYS.
+_POLL_TIME_KEY = "poller_last_run"
+
+
+def record_poll_time():
+    """Note that a poll cycle reached a calendar, whether or not it changed.
+
+    Written by SQLite's own datetime() so it matches the cached_at format the
+    wall already parses.
+    """
     with get_db() as conn:
+        conn.execute("""
+            INSERT INTO settings (key, value, updated_at)
+            VALUES (?, datetime('now'), datetime('now'))
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value,
+                                           updated_at = excluded.updated_at
+        """, (_POLL_TIME_KEY,))
+
+
+def get_last_poll_time():
+    """When the poller last completed a cycle that reached a calendar.
+
+    Prefers the recorded cycle time over MAX(cached_at). The cache is only
+    rewritten when something actually changed, so a calendar nobody has
+    touched in a week would otherwise look like a poller that died a week
+    ago — and the wall would light its staleness dot for a healthy system.
+    """
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT value FROM settings WHERE key = ?", (_POLL_TIME_KEY,)
+        ).fetchone()
+        if row and row["value"]:
+            return row["value"]
         row = conn.execute(
             "SELECT MAX(cached_at) as last_poll FROM events_cache"
         ).fetchone()
