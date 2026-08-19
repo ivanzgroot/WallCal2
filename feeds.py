@@ -15,7 +15,8 @@ transit API turned out to be unreliable while this was being written, so
 having a second implementation is the actual requirement rather than a
 hypothetical one.
 
-No new dependency — `requests` is already in the tree via `caldav`.
+`requests` is declared in requirements.txt. It used to come in through
+caldav, which dropped it for niquests in 3.x — hence the explicit pin.
 """
 
 from __future__ import annotations

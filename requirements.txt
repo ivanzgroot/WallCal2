@@ -5,6 +5,13 @@ python-dateutil>=2.8.0
 cryptography>=41.0.0
 pyserial>=3.5
 
+# feeds.py imports this directly. It used to arrive transitively through
+# caldav, which is what the comment in feeds.py still claimed — caldav 3.x
+# swapped requests for niquests, so a fresh install got a tree without it and
+# app.py could not import at all. Declared explicitly rather than relying on
+# somebody else's dependency again.
+requests>=2.28.0
+
 # QR encoding for the companion code (§5.5). Pure Python, zero runtime
 # dependencies, ~100 kB. Justified over hand-rolling it: correct QR output
 # needs Reed-Solomon error correction, version selection and mask evaluation,
