@@ -334,6 +334,13 @@ def delete_calendar(cal_id):
         return jsonify({"error": "Calendar not found"}), 404
 
     database.delete_calendar(cal_id)
+
+    # The Abfall widget names its source by id. Left dangling, the widget
+    # simply goes quiet with nothing anywhere saying why.
+    if (database.get_setting("abfall_calendar_id", "") or "").strip() == str(cal_id):
+        database.set_setting("abfall_calendar_id", "")
+        logger.info("Cleared abfall_calendar_id — calendar %d was deleted", cal_id)
+
     logger.info("Calendar %d deleted", cal_id)
     return jsonify({"ok": True})
 
@@ -576,6 +583,11 @@ def get_presence_live():
         # None in gpio and none sensor modes, which have no distance at all —
         # the wall display falls back to a single layout when it sees that.
         "distance_cm": reading.get("distance_cm"),
+        # The settings page paints its manual-control buttons from this.
+        # Without it the page could only ever show the override it had just
+        # set itself, so a display forced on stayed forced on while the UI
+        # went on claiming "automatisch".
+        "override": state.get("override", "auto"),
         "daemon_running": state.get("daemon_running", False),
     })
 
