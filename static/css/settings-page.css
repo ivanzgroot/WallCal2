@@ -410,6 +410,95 @@ input[type="range"]::-moz-range-thumb { width: 26px; height: 26px; border: none;
 .cal-item .who b { display: block; font-size: 15px; font-weight: 600; }
 .cal-item .who span { font-size: 12.5px; color: var(--type-lo); word-break: break-all; }
 
+
+/* --- Structured editors ---------------------------------------------
+   These replaced two textareas holding a private syntax. The shapes stay
+   deliberately plain: a day is a row, a window is two times, a bin is a
+   colour and two words. Nothing here should look like a form to fill in. */
+.editor { display: flex; flex-direction: column; gap: 2px; }
+
+.win-day {
+    padding: 8px 0;
+    border-bottom: 1px solid var(--border-subtle);
+}
+.win-day:last-child { border-bottom: none; }
+.win-day-head {
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+}
+.win-day-name { font-size: 14.5px; font-weight: 600; color: var(--type-hi); }
+.win-day.empty .win-day-name { color: var(--type-lo); font-weight: 500; }
+.win-none { margin: 4px 0 0; font-size: 13px; color: var(--type-lo); }
+
+.win-range {
+    display: flex; align-items: center; gap: 8px; margin-top: 8px;
+}
+.win-range input[type="time"] { flex: 1 1 0; min-width: 0; }
+.win-range .dash { color: var(--type-lo); flex: none; }
+
+/* A 44px target that does not read as a button until you need it. */
+.icon-btn {
+    flex: none;
+    width: 44px; height: 44px;
+    display: inline-flex; align-items: center; justify-content: center;
+    font-size: 20px; line-height: 1;
+    color: var(--type-lo);
+    background: none;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+}
+.icon-btn:hover { color: var(--type-hi); border-color: var(--type-lo); }
+.icon-btn.add { color: var(--now); border-color: transparent; }
+
+.frac-row { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+.frac-row input[type="text"] { flex: 1 1 0; min-width: 0; }
+.frac-color {
+    flex: none;
+    width: 44px; height: 44px; padding: 2px;
+    background: none; border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+}
+/* Incomplete rows are kept, not silently dropped — the wall ignores them
+   until both halves are there, and the row says so rather than vanishing. */
+.frac-row.incomplete input[type="text"] { border-color: var(--alert); }
+
+/* --- Pick from what exists ------------------------------------------- */
+.picker { display: flex; flex-direction: column; gap: 2px; margin-bottom: 10px; }
+.pick {
+    display: flex; align-items: flex-start; gap: 10px;
+    min-height: 44px; padding: 8px 0;
+    cursor: pointer;
+}
+.pick input[type="checkbox"] {
+    flex: none; width: 22px; height: 22px; margin-top: 2px;
+    accent-color: var(--now);
+}
+.pick b { display: block; font-size: 14.5px; font-weight: 600; color: var(--type-hi); }
+.pick small { display: block; font-size: 12.5px; color: var(--type-lo); line-height: 1.4; }
+.pick.off { opacity: 0.45; cursor: default; }
+
+/* A pair that should never have crossed, on an installation that crossed it
+   before the sliders started pushing each other. */
+input[type="range"].conflict::-webkit-slider-runnable-track { background: var(--alert); }
+input[type="range"].conflict::-moz-range-track { background: var(--alert); }
+
+/* --- An override is a mode, and modes are visible ---------------------
+   The buttons that set this live inside a collapsed <details>. Somebody who
+   forced the panel on last week will not open it to find out why the wall
+   never sleeps, so the state comes to them with the way out attached. */
+.override-banner {
+    position: sticky; top: 64px; z-index: 26;
+    display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+    margin-bottom: 12px; padding: 12px 14px;
+    background: var(--surface);
+    border: 1px solid var(--alert);
+    border-left-width: 3px;
+    border-radius: var(--radius);
+}
+.override-banner b { font-size: 14.5px; color: var(--type-hi); }
+.override-banner span { flex: 1 1 auto; font-size: 13px; color: var(--type-lo); }
+.override-banner .btn { flex: none; }
+
 @media (min-width: 640px) {
     .wrap { padding: 0 24px 96px; }
     .row { padding: 16px 20px; }

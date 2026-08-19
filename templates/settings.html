@@ -27,6 +27,7 @@
          ============================================================ -->
     <div class="setup" id="setupCard" hidden></div>
     <div id="saveError" class="save-error" aria-live="polite"></div>
+    <div id="overrideBanner" class="override-banner" role="status" hidden></div>
 
     <nav class="jumper" id="jumper" aria-label="Abschnitte">
         <a href="#calendars">Kalender</a>
@@ -88,10 +89,14 @@
                     <div class="control"><input type="time" id="setAbfallUntil" data-setting="abfall_until_hour"></div>
                 </div>
                 <div class="row">
-                    <div class="row-head"><label for="setAbfallFractions">Fraktionen</label></div>
-                    <p class="desc">Textbaustein im Titel = Anzeigename:Farbe, getrennt mit <code>|</code>.
-                       Jede Kommune benennt die Tonnen anders.</p>
-                    <div class="control"><textarea id="setAbfallFractions" data-setting="abfall_fractions" spellcheck="false"></textarea></div>
+                    <div class="row-head"><span class="name">Fraktionen</span>
+                        <span class="value" data-value-for="abfall_fractions">—</span></div>
+                    <p class="desc">Jede Kommune benennt die Tonnen anders. Steht der Suchbegriff
+                       im Titel des Termins, erscheint das Banner in dieser Farbe.</p>
+                    <div class="control">
+                        <div class="editor" id="fractionEditor"></div>
+                        <button class="btn ghost" id="fractionAdd" type="button">Fraktion hinzufügen</button>
+                    </div>
                 </div>
             </div>
         </details>
@@ -152,10 +157,14 @@
                            data-setting="transit_count"></div>
                 </div>
                 <div class="row">
-                    <div class="row-head"><label for="setTransitWindows">Zeitfenster</label></div>
-                    <p class="desc">Pro Wochentag, z. B. <code>mon=06:30-09:00,16:00-18:30</code>.
-                       Leer heißt: an dem Tag nicht anzeigen.</p>
-                    <div class="control"><textarea id="setTransitWindows" data-setting="transit_windows" spellcheck="false"></textarea></div>
+                    <div class="row-head"><span class="name">Zeitfenster</span>
+                        <span class="value" data-value-for="transit_windows">—</span></div>
+                    <p class="desc">Wann die Tafel im Modus „Dynamisch“ zu sehen ist.
+                       Ein Tag ohne Zeitfenster wird nicht angezeigt.</p>
+                    <div class="control">
+                        <div class="editor" id="windowEditor"></div>
+                        <button class="btn ghost" id="windowCopy" type="button">Montag auf Di–Fr übertragen</button>
+                    </div>
                 </div>
                 <div class="row">
                     <div class="row-head"><label for="setTransitLines">Nur diese Linien</label></div>
@@ -259,7 +268,7 @@
                         <span class="value" data-value-for="density_mode">—</span></div>
                     <p class="desc" id="densityWhy">Wechselt je nach Abstand zwischen Fern- und Nahansicht.</p>
                     <div class="control seg" data-seg="density_mode"
-                         data-options="auto:Automatisch|on:Immer|off:Aus"></div>
+                         data-options="auto:Automatisch|on:Immer wechseln|near:Nur Nah|far:Nur Fern"></div>
                 </div>
                 <div class="row">
                     <div class="row-head"><label for="setEnterMs">Reaktion beim Hinlaufen</label>
@@ -289,14 +298,16 @@
                         <span class="value" data-value-for="density_near_cm">—</span></div>
                     <p class="desc">Näher als das zeigt die Wand die Detailansicht — siehe Markierung im Messbalken unter „Präsenz“.</p>
                     <div class="control"><input type="range" id="setNearCm" min="30" max="400" step="10"
-                           data-setting="density_near_cm" data-unit=" cm"></div>
+                           data-setting="density_near_cm" data-unit=" cm" data-linked="density"></div>
                 </div>
                 <div class="row">
                     <div class="row-head"><label for="setFarCm">Wieder fern ab</label>
                         <span class="value" data-value-for="density_far_cm">—</span></div>
-                    <p class="desc">Muss größer sein als „Nah ab“, sonst springt das Layout am Übergang.</p>
+                    <p class="desc">Der Abstand dazwischen ist der Totbereich, in dem nichts umschaltet.
+                       Beide Regler halten mindestens 20 cm Abstand — schiebst du einen darüber hinaus,
+                       weicht der andere aus.</p>
                     <div class="control"><input type="range" id="setFarCm" min="40" max="500" step="10"
-                           data-setting="density_far_cm" data-unit=" cm"></div>
+                           data-setting="density_far_cm" data-unit=" cm" data-linked="density"></div>
                 </div>
             </div>
         </details>
@@ -579,6 +590,7 @@
                     <div class="row-head"><span class="name">Anzeige</span>
                         <span class="value" id="overrideValue">automatisch</span></div>
                     <p class="desc">Übersteuert die Erkennung, bis du sie zurückstellst.</p>
+                    <p class="consequence" id="overrideNote"></p>
                     <div class="control seg" id="overrideSeg">
                         <button data-mode="auto">Automatisch</button>
                         <button data-mode="on">Immer an</button>
@@ -632,18 +644,23 @@
                 <div class="group">
                     <h3>Abschaltmethode</h3>
                     <div class="row">
-                        <div class="row-head"><label for="setOffStrategy">display_off_strategy</label>
+                        <div class="row-head"><span class="name">Abschaltmethode</span>
                             <span class="value" data-value-for="display_off_strategy">—</span></div>
-                        <p class="desc">Kommagetrennt kombinierbar: <code>pwm,hdmi</code> dimmt und schaltet den Ausgang ab.</p>
-                        <div class="control"><input type="text" id="setOffStrategy" data-setting="display_off_strategy"
-                               placeholder="hdmi | pwm | css | none"></div>
-                        <p class="consequence">„none“ schaltet nie ab — der Bildschirmschoner übernimmt.</p>
+                        <p class="desc">Wie der Bildschirm dunkel wird. Mehreres lässt sich kombinieren —
+                           <code>pwm</code> und <code>hdmi</code> zusammen dimmt und schaltet ab.</p>
+                        <div class="control"><div class="picker" id="strategyPicker"></div></div>
+                        <p class="consequence" id="strategyNote"></p>
                     </div>
                     <div class="row">
-                        <div class="row-head"><label for="setBackend">display_backend</label>
+                        <div class="row-head"><span class="name">Backend</span>
                             <span class="value" data-value-for="display_backend">—</span></div>
-                        <p class="desc"><code>auto</code> erkennt selbst. Sonst z. B. <code>xset,cec</code>.</p>
-                        <div class="control"><input type="text" id="setBackend" data-setting="display_backend"></div>
+                        <p class="desc">Womit der Ausgang geschaltet wird. „Automatisch“ nimmt das beste
+                           vorhandene und passt sich an, wenn später eine Sitzung startet.</p>
+                        <div class="control">
+                            <div class="picker" id="backendPicker"></div>
+                            <button class="btn ghost" id="backendDetect" type="button">Vorhandene Backends erkennen</button>
+                        </div>
+                        <p class="consequence" id="backendNote"></p>
                     </div>
                 </div>
 
