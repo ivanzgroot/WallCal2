@@ -428,7 +428,7 @@ caldav_poller.py        Background CalDAV sync
 database.py             SQLite persistence, migrations, feed cache
 config.py               Defaults, all overridable via WALLCAL_* env vars
 feeds.py                Transit, weather and travel-time providers
-widgets.py              Widget visibility rules and display shaping
+widgets.py              Widget visibility rules, shaping, and feed refresh
 prewake.py              Anticipatory wake: publishes the next wake window
 presence/
   ld2410.py             HLK-LD2410C UART protocol driver

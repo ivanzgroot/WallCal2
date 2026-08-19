@@ -84,13 +84,50 @@ def _write_json(path: str, payload: dict) -> None:
         raise
 
 
+#: path -> ((inode, size, mtime_ns), parsed). Reading is on two hot paths:
+#: the SSE generator watches the state file ten times a second, and the daemon
+#: reads the command file on every radar frame. Both almost always find it
+#: unchanged, so the parse happens only when the file actually moved — a stat
+#: instead of a full json.load, which is an order of magnitude cheaper.
+_parse_cache: dict = {}
+
+
 def _read_json(path: str) -> dict:
+    """Parse ``path``, reusing the last parse while the file is untouched.
+
+    The returned dict is a shallow copy, so callers may add top-level keys
+    (``read_state`` annotates liveness, /api/presence adds a hint) without
+    poisoning the cache. Nested values are shared and must be treated as
+    read-only — nothing in the project mutates them.
+    """
+    try:
+        stat = os.stat(path)
+    except OSError:
+        _parse_cache.pop(path, None)
+        return {}
+
+    # The inode is in the stamp because writes land via os.replace, which
+    # swaps the file rather than rewriting it in place.
+    stamp = (stat.st_ino, stat.st_size, stat.st_mtime_ns)
+    cached = _parse_cache.get(path)
+    if cached is not None and cached[0] == stamp:
+        return dict(cached[1])
+
     try:
         with open(path) as fh:
             data = json.load(fh)
-        return data if isinstance(data, dict) else {}
     except (OSError, ValueError):
+        _parse_cache.pop(path, None)
         return {}
+
+    if not isinstance(data, dict):
+        _parse_cache.pop(path, None)
+        return {}
+
+    # A write racing the stat above only ever caches newer content under an
+    # older stamp, which costs one redundant parse on the next call.
+    _parse_cache[path] = (stamp, data)
+    return dict(data)
 
 
 # ---------------------------------------------------------------------------

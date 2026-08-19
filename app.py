@@ -46,6 +46,7 @@ app.secret_key = config.SECRET_KEY
 
 poller = CalDAVPoller()
 prewake_scheduler = prewake.PrewakeScheduler()
+widget_refresher = widgets.Refresher()
 
 
 # ---------------------------------------------------------------------------
@@ -101,29 +102,37 @@ def get_events():
     settings = database.get_all_settings()
     abfall_id = (settings.get("abfall_calendar_id") or "").strip()
 
+    # Read the window once and split it here. Asking the database a second
+    # time for the Abfall calendar meant scanning and materialising the same
+    # rows twice on every poll from the wall.
+    rows = database.get_cached_events(days=days)
+
     # The Abfall source is a CalDAV calendar like any other, but its entries
     # belong to their own widget rather than the day's agenda.
-    events = database.get_cached_events(
-        days=days, exclude_calendar_ids=[abfall_id] if abfall_id else None)
+    events = ([e for e in rows if str(e.get("calendar_id")) != abfall_id]
+              if abfall_id else rows)
     return jsonify({
         "events": events,
         "count": len(events),
-        "abfall": _abfall_payload(settings),
+        "abfall": _abfall_payload(settings, rows),
         "last_poll": database.get_last_poll_time(),
         "generated_at": datetime.now(timezone.utc).isoformat(),
     })
 
 
-def _abfall_payload(settings):
+def _abfall_payload(settings, rows):
     """Upcoming bin collections, already mapped to fraction and colour.
 
     Multiple fractions on one day are kept as a list rather than collapsed,
     so the wall renders them together instead of one overwriting the other.
+
+    ``rows`` is the event window the agenda was already built from, so this
+    follows the caller's horizon rather than querying its own 30 days. The
+    output is capped at the next eight collection days either way.
     """
     cal_id = (settings.get("abfall_calendar_id") or "").strip()
     if not cal_id.isdigit():
         return None
-    rows = database.get_cached_events(days=30)
     fractions = widgets.parse_fractions(settings.get("abfall_fractions", ""))
 
     by_day = {}
@@ -155,13 +164,14 @@ def _abfall_payload(settings):
 
 @app.route("/api/widgets")
 def get_widgets():
-    settings = database.get_all_settings()
-    awake = presence_runtime.read_state().get("display_on")
+    """Answered from SQLite, always.
 
-    # Never poll a dark screen. The daemon publishes the panel state, so a
-    # sleeping wall stops costing anyone's rate limit.
-    allow_fetch = awake is not False
-    return jsonify(widgets.collect(settings, allow_fetch=allow_fetch))
+    widgets.Refresher owns the fetching, on its own thread. This handler runs
+    the same rules with allow_fetch off, so it cannot block on a network the
+    Pi may not currently have.
+    """
+    settings = database.get_all_settings()
+    return jsonify(widgets.collect(settings, allow_fetch=False))
 
 
 @app.route("/api/transit/search")
@@ -238,14 +248,23 @@ def update_settings():
 
     # A changed station or location invalidates its cache; leaving it would
     # keep the old departures on the wall until the TTL happened to lapse.
+    invalidated = False
     if {"transit_station_id", "transit_provider"} & set(filtered):
         database.forget_feed("transit:")
+        invalidated = True
     if {"weather_lat", "weather_lon", "weather_units"} & set(filtered):
         database.forget_feed("weather")
+        invalidated = True
     if {"home_lat", "home_lon"} & set(filtered):
         database.forget_feed("travel:")
+        invalidated = True
     if any(k.startswith("prewake_") for k in filtered):
         prewake_scheduler.poke()
+
+    # A cleared cache has nothing to serve until the refresher runs again, and
+    # somebody is sitting on the settings page waiting to see it work.
+    if invalidated or any(k.startswith("widget_") for k in filtered):
+        widget_refresher.poke()
 
     # Nudge the presence daemon so sensor/display changes apply immediately
     # instead of waiting for its next scheduled reload.
@@ -561,6 +580,17 @@ def get_presence_live():
     })
 
 
+#: How often the stream re-checks the state file. The daemon writes at most
+#: every 0.3 s, so this bounds how long a transition somebody is standing
+#: there watching can go unseen.
+POLL_SECONDS = 0.1
+
+#: How long an unchanged stream stays silent before a keepalive. Long enough
+#: that an idle wall costs nothing, short enough that proxies and the browser
+#: keep the connection open.
+KEEPALIVE_SECONDS = 15.0
+
+
 @app.route("/api/presence/stream")
 def presence_stream():
     """Push panel state to the wall the moment it changes.
@@ -582,6 +612,7 @@ def presence_stream():
         # A comment line opens the stream so the browser fires onopen even
         # when the first real change is minutes away.
         yield ': connected' + sep
+        last_write = time.monotonic()
         while True:
             state = presence_runtime.read_state()
             payload = {
@@ -593,13 +624,19 @@ def presence_stream():
                 'screensaver': state.get('screensaver') or {},
                 'daemon_running': state.get('daemon_running', False),
             }
+            now = time.monotonic()
             if payload != previous:
                 previous = payload
+                last_write = now
                 yield 'data: ' + json.dumps(payload) + sep
-            else:
-                # Keeps proxies and the browser from closing an idle stream.
+            elif now - last_write >= KEEPALIVE_SECONDS:
+                # Keeps proxies and the browser from closing an idle stream,
+                # and is what surfaces a vanished client as a broken pipe.
+                # Emitting it every tick instead cost 864,000 frames a day,
+                # each one waking the kiosk browser to discard a comment.
+                last_write = now
                 yield ': keepalive' + sep
-            time.sleep(0.1)
+            time.sleep(POLL_SECONDS)
 
     return Response(watch(), mimetype="text/event-stream", headers={
         "Cache-Control": "no-cache",
@@ -888,6 +925,7 @@ def shutdown_handler(signum, frame):
     logger.info("Received signal %d — shutting down", signum)
     poller.stop()
     prewake_scheduler.stop()
+    widget_refresher.stop()
     sys.exit(0)
 
 
@@ -904,6 +942,9 @@ def main():
 
     # Publish the anticipatory wake window for the daemon to act on.
     prewake_scheduler.start()
+
+    # Keep the widget feed cache warm off the request path.
+    widget_refresher.start()
 
     # Start Flask
     logger.info("WallCal starting on %s:%d", config.HOST, config.PORT)

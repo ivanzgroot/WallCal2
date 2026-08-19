@@ -65,6 +65,11 @@ time.sleep(0.5)
 check("silent while nothing changes",
       len([f for f in frames if f.startswith("data:")]), before)
 
+# Silent on the wire too. A keepalive on every 0.1 s tick was 864,000 frames
+# a day, each one waking the kiosk browser to parse a comment and throw it
+# away. Only the opening ': connected' belongs in the first second.
+check("no keepalive flood", len([f for f in frames if f.startswith(":")]), 1)
+
 runtime.write_state({"density": "near", "display_on": True, "display_mode": "normal",
                      "brightness": 100, "brightness_source": "css"})
 time.sleep(0.5)

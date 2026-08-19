@@ -14,15 +14,22 @@ browser works out whether it should be there.
 from __future__ import annotations
 
 import logging
+import threading
 from datetime import datetime, time as dtime, timedelta, timezone
 
 import database
 import feeds
+from presence import runtime
 
 logger = logging.getLogger("wallcal.widgets")
 
 ALWAYS, DYNAMIC, OFF = "always", "dynamic", "off"
 WEEKDAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
+
+#: How often the refresher re-runs the visibility rules. It only reaches the
+#: network when a feed's own TTL has lapsed, so this is the granularity of
+#: staleness rather than a request rate: the shortest TTL is transit's 60 s.
+REFRESH_INTERVAL = 20.0
 
 
 def visibility(settings, key):
@@ -36,6 +43,11 @@ def collect(settings, allow_fetch=True, now=None):
     ``visible`` is the widget's own verdict. ``slot`` is a stable grid area
     name: reserved whether or not the widget is showing, so a bus becoming due
     never reshuffles the layout around it.
+
+    ``allow_fetch`` is what separates the two callers. The Refresher passes
+    True on its own thread and may go to the network; the HTTP handler passes
+    False and is answered from SQLite alone. Both run the same rules, so the
+    decision about whether a feed is worth having exists in exactly one place.
     """
     now = now or datetime.now()
     return {
@@ -46,6 +58,65 @@ def collect(settings, allow_fetch=True, now=None):
         "qr": _qr(settings),
         "feeds": database.feed_freshness(),
     }
+
+
+# ---------------------------------------------------------------------------
+# Background refresh
+#
+# The fetch used to happen inside the /api/widgets handler, which put an
+# 8 s-per-feed network timeout in front of a request the wall abandons after
+# 10 s: on a slow WLAN the widgets stopped updating even though the cache was
+# fine. feeds.py already says a fetch is never in the path of a render — this
+# is the thread that makes that true for widgets too.
+# ---------------------------------------------------------------------------
+
+class Refresher:
+    """Keeps the feed cache warm so the HTTP handler never has to wait."""
+
+    def __init__(self, interval=REFRESH_INTERVAL):
+        self.interval = interval
+        self._stop = threading.Event()
+        self._wake = threading.Event()
+        self._thread = None
+        self.last_run = None
+
+    def start(self):
+        if self._thread is not None:
+            return self
+        self._thread = threading.Thread(target=self._run, daemon=True,
+                                        name="widgets")
+        self._thread.start()
+        return self
+
+    def stop(self):
+        self._stop.set()
+        self._wake.set()
+
+    def poke(self):
+        """Refresh now — after a settings change invalidated a feed."""
+        self._wake.set()
+
+    def refresh_once(self):
+        """One pass. Discards the result: the point is the cache behind it."""
+        settings = database.get_all_settings()
+
+        # Never poll a dark screen. The daemon publishes the panel state, so a
+        # sleeping wall stops costing anyone's rate limit.
+        if runtime.read_state().get("display_on") is False:
+            return False
+
+        collect(settings, allow_fetch=True)
+        self.last_run = datetime.now()
+        return True
+
+    def _run(self):
+        while not self._stop.is_set():
+            try:
+                self.refresh_once()
+            except Exception:
+                logger.exception("widget refresh loop")
+            self._wake.wait(self.interval)
+            self._wake.clear()
 
 
 # ---------------------------------------------------------------------------

@@ -35,7 +35,14 @@ from presence import ld2410                      # noqa: E402
 
 logger = logging.getLogger("wallcal.presence")
 
-SETTINGS_RELOAD_INTERVAL = 3.0      # seconds between settings re-reads
+#: The fallback, not the mechanism. Both writers — the settings API and
+#: `wallcal.sh config set` — bump reload_seq in command.json, which
+#: _poll_commands picks up on the next radar frame, so an interactive change
+#: still lands in well under a second. Polling ten times faster than that only
+#: bought re-reads for a database edited behind the app's back, at the price
+#: of 28,800 SQLite opens a day against the SD card.
+SETTINGS_RELOAD_INTERVAL = 30.0     # seconds between settings re-reads
+
 #: The wall polls this file for the distance that drives near/far switching,
 #: so a one-second write interval put a whole second of lag in front of a
 #: transition somebody is watching. It is a small JSON blob on tmpfs — the SD
