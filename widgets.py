@@ -223,7 +223,11 @@ def _weather(settings, allow_fetch, now):
     if vis == OFF or not settings.get("weather_lat"):
         return slot
 
-    data = feeds.weather(settings) if allow_fetch else None
+    # Never `if allow_fetch else None`: the render path is the one that has
+    # to answer, and it answers from SQLite. Gating the whole call on the
+    # flag left the widget permanently invisible the moment the fetching
+    # moved to its own thread.
+    data = feeds.weather(settings, allow_fetch)
     if not data:
         return slot
 
@@ -305,10 +309,7 @@ def _travel(settings, allow_fetch, now):
     minutes_until = (start - now).total_seconds() / 60.0
     if vis == DYNAMIC and not (0 <= minutes_until <= window):
         return slot
-    if not allow_fetch:
-        return slot
-
-    result = feeds.travel_time(event.get("location"), settings)
+    result = feeds.travel_time(event.get("location"), settings, allow_fetch)
     if not result or result.get("minutes") is None:
         return slot          # unroutable: also silent
 

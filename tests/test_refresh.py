@@ -37,7 +37,24 @@ def check(label, got, want):
 # Every provider reaches the network through this one helper, so replacing it
 # seals the whole module. Returning {} is a valid empty answer for all of them.
 calls = []
-feeds._get = lambda url, params=None: calls.append(url) or {}
+WEATHER = {
+    "current": {"temperature_2m": 18.2, "apparent_temperature": 17.0,
+                "weather_code": 61, "is_day": 1, "precipitation": 0.4,
+                "wind_speed_10m": 12},
+    "hourly": {"time": [], "temperature_2m": [],
+               "precipitation_probability": [], "weather_code": []},
+    "daily": {"time": ["2026-08-19"], "temperature_2m_min": [12],
+              "temperature_2m_max": [21],
+              "precipitation_probability_max": [55], "weather_code": [61]},
+}
+
+
+def _stub(url, params=None):
+    calls.append(url)
+    return WEATHER if "open-meteo" in url else {}
+
+
+feeds._get = _stub
 
 database.set_many_settings({
     "widget_transit": "always", "transit_station_id": "de:09362:12345",
@@ -77,6 +94,11 @@ body = client.get("/api/widgets").get_json()
 check("still no fetching", calls, [])
 check("transit slot present", body["transit"]["slot"], "transit")
 check("station carried through", body["transit"].get("station"), "Regensburg Hbf")
+# Every widget, not just the one whose fallback was written by hand. Weather
+# and travel used to gate the whole provider call on allow_fetch, so moving
+# the fetching to a thread left them permanently invisible on the wall.
+check("weather rendered from the cache", body["weather"]["visible"], True)
+check("with a real reading in it", body["weather"]["temperature"] is not None, True)
 
 print("")
 print("A dark panel costs nobody's rate limit")

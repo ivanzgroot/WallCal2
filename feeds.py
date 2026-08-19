@@ -46,13 +46,18 @@ def _get(url, params=None):
     return r.json()
 
 
-def cached(feed, ttl, fetch):
+def cached(feed, ttl, fetch, allow_fetch=True):
     """Refresh ``feed`` if its TTL has expired; always return the cache entry.
 
     The return value is whatever is cached, fresh or not — callers render it
     either way and let the staleness marker do the talking.
+
+    ``allow_fetch=False`` is the render path: answer from SQLite and never
+    reach the network, however stale the copy is. Refusing to answer at all
+    would put a blank widget on the wall every time the Pi lost its WLAN,
+    which is the one outcome this module exists to prevent.
     """
-    if database.feed_is_fresh(feed):
+    if not allow_fetch or database.feed_is_fresh(feed):
         return database.get_feed(feed)
     try:
         database.cache_feed(feed, fetch(), ttl)
@@ -218,7 +223,7 @@ def transit_departures(settings=None):
 # Weather — Open-Meteo, no key
 # ---------------------------------------------------------------------------
 
-def weather(settings=None):
+def weather(settings=None, allow_fetch=True):
     """Current conditions plus the single most actionable fact for today."""
     settings = settings or database.get_all_settings()
     lat = settings.get("weather_lat")
@@ -245,7 +250,7 @@ def weather(settings=None):
             "wind_speed_unit": "mph" if units == "imperial" else "kmh",
         })
 
-    entry = cached("weather", ttl, fetch)
+    entry = cached("weather", ttl, fetch, allow_fetch)
     if not entry:
         return None
     data = entry["payload"] or {}
@@ -308,7 +313,7 @@ def _weather_headline(data, settings):
 # Travel time
 # ---------------------------------------------------------------------------
 
-def travel_time(destination, settings=None):
+def travel_time(destination, settings=None, allow_fetch=True):
     """Minutes to ``destination`` by public transport, or None.
 
     Geocoding is cached hard and separately from the route: event locations
@@ -322,7 +327,7 @@ def travel_time(destination, settings=None):
     if not home_lat or not home_lon:
         return None
 
-    dest = _geocode(destination)
+    dest = _geocode(destination, allow_fetch)
     if not dest:
         return None      # unparseable address: skip silently, never an error
 
@@ -341,7 +346,8 @@ def travel_time(destination, settings=None):
             raise ValueError("no itinerary")
         return {"minutes": int(round((its[0].get("duration") or 0) / 60.0))}
 
-    entry = cached(feed, _int(settings.get("travel_refresh_seconds"), 1800), fetch)
+    entry = cached(feed, _int(settings.get("travel_refresh_seconds"), 1800), fetch,
+                   allow_fetch)
     if not entry or not entry["payload"]:
         return None
     return {"minutes": entry["payload"].get("minutes"),
@@ -359,10 +365,10 @@ def geocode_search(text):
     return out
 
 
-def _geocode(text):
+def _geocode(text, allow_fetch=True):
     """Resolve a free-text location once and keep it for a month."""
     key = "geo:" + " ".join(str(text).split()).lower()[:120]
-    entry = cached(key, 30 * 86400, lambda: _geocode_fetch(text))
+    entry = cached(key, 30 * 86400, lambda: _geocode_fetch(text), allow_fetch)
     if not entry or not entry["payload"]:
         return None
     return entry["payload"]
