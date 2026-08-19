@@ -19,6 +19,7 @@ from datetime import datetime, time as dtime, timedelta, timezone
 
 import database
 import feeds
+import localtime
 from presence import runtime
 
 logger = logging.getLogger("wallcal.widgets")
@@ -49,7 +50,9 @@ def collect(settings, allow_fetch=True, now=None):
     False and is answered from SQLite alone. Both run the same rules, so the
     decision about whether a feed is worth having exists in exactly one place.
     """
-    now = now or datetime.now()
+    # Aware, in the wall's zone, so every comparison against a cached event
+    # is between two instants rather than two spellings of a wall clock.
+    now = now or localtime.now(settings)
     return {
         "generated_at": now.isoformat(timespec="seconds"),
         "transit": _transit(settings, allow_fetch, now),
@@ -302,7 +305,7 @@ def _travel(settings, allow_fetch, now):
     if not event:
         return slot          # no address: skip silently, never an error
 
-    start = _parse_event_start(event)
+    start = _parse_event_start(event, settings)
     if not start:
         return slot
     window = _int(settings.get("travel_window_minutes"), 90)
@@ -334,19 +337,14 @@ def _next_event_with_location(settings, now):
     for ev in rows:
         if ev.get("all_day") or not (ev.get("location") or "").strip():
             continue
-        start = _parse_event_start(ev)
+        start = _parse_event_start(ev, settings)
         if start and start >= now:
             return ev
     return None
 
 
-def _parse_event_start(ev):
-    try:
-        raw = str(ev.get("dtstart", "")).replace("Z", "")
-        at = datetime.fromisoformat(raw)
-        return at.replace(tzinfo=None)
-    except (ValueError, AttributeError):
-        return None
+def _parse_event_start(ev, settings=None):
+    return localtime.parse_event_start(ev, settings)
 
 
 # ---------------------------------------------------------------------------

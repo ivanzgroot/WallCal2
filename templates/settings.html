@@ -377,10 +377,17 @@
             <summary>Sprache, Zeitzone, Drehung</summary>
             <div class="more-body">
                 <div class="row">
-                    <div class="row-head"><label for="setTimezone">Zeitzone</label>
+                    <div class="row-head"><label for="tzSearch">Zeitzone</label>
                         <span class="value" data-value-for="timezone">—</span></div>
-                    <p class="desc"><code>auto</code> übernimmt die Zeitzone des Geräts.</p>
-                    <div class="control"><input type="text" id="setTimezone" data-setting="timezone" placeholder="Europe/Berlin"></div>
+                    <p class="desc">Gilt für die Uhr, die Terminzeiten und alle Zeitfenster.
+                       „Automatisch“ übernimmt die Zeitzone des Geräts — richtig, solange
+                       die Uhr des Pi stimmt.</p>
+                    <div class="control">
+                        <input type="search" id="tzSearch" placeholder="Suchen, z. B. Berlin">
+                        <div class="results" id="tzResults"></div>
+                        <button class="btn ghost" id="tzAuto" type="button">Automatisch (Gerät)</button>
+                    </div>
+                    <p class="consequence" id="tzNow"></p>
                 </div>
                 <div class="row">
                     <div class="row-head"><label for="setLocale">Sprache</label>

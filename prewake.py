@@ -15,9 +15,10 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 import database
+import localtime
 from presence import runtime
 
 logger = logging.getLogger("wallcal.prewake")
@@ -36,13 +37,6 @@ def _bool(value, default=False):
     if value is None:
         return default
     return str(value).strip().lower() in ("1", "true", "yes", "on")
-
-
-def _parse_start(ev):
-    try:
-        return datetime.fromisoformat(str(ev.get("dtstart", "")).replace("Z", ""))
-    except (ValueError, AttributeError):
-        return None
 
 
 def _hhmm(text, fallback=(7, 0)):
@@ -64,7 +58,10 @@ def next_wake(settings=None, now=None):
     if not _bool(settings.get("prewake_enabled")):
         return None
 
-    now = now or datetime.now()
+    # Aware, in the wall's zone. The cache holds UTC, so comparing a stripped
+    # copy of it against a local clock woke the panel an hour or two early
+    # and let the window close before the event it was for.
+    now = localtime.to_local(now, settings) if now else localtime.now(settings)
     lead = timedelta(minutes=_int(settings.get("prewake_lead_minutes"), 35))
     hold = timedelta(minutes=_int(settings.get("prewake_hold_minutes"), 5))
     timed_only = _bool(settings.get("prewake_timed_only"), True)
@@ -82,7 +79,7 @@ def next_wake(settings=None, now=None):
         if wanted and str(ev.get("calendar_id")) not in wanted:
             continue
 
-        start = _parse_start(ev)
+        start = localtime.parse_event_start(ev, settings)
         if start is None:
             continue
 
@@ -115,8 +112,10 @@ def publish(settings=None):
         return None
     start, end, label = plan
     runtime.set_wake_plan(start.timestamp(), end.timestamp(), label)
-    return {"from": start.isoformat(timespec="minutes"),
-            "until": end.isoformat(timespec="minutes"), "label": label}
+    # Local wall-clock for display: the offset is noise on a page that only
+    # ever talks about this room.
+    return {"from": start.strftime("%Y-%m-%dT%H:%M"),
+            "until": end.strftime("%Y-%m-%dT%H:%M"), "label": label}
 
 
 class PrewakeScheduler:

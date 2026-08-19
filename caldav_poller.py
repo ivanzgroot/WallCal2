@@ -12,14 +12,11 @@ from datetime import datetime, timedelta, date, timezone
 import caldav
 from icalendar import Calendar as iCalendar
 from dateutil.rrule import rrulestr
-from dateutil.tz import tzutc, gettz
+from dateutil.tz import tzutc
 
 import database
 
 logger = logging.getLogger(__name__)
-
-# Timezone for display — events stored as UTC internally
-LOCAL_TZ = gettz("Europe/Berlin")
 
 
 class CalDAVPoller:
@@ -223,8 +220,13 @@ class CalDAVPoller:
             # Handle recurring events
             rrule_prop = component.get("RRULE")
             if rrule_prop:
+                # Anchored on the ORIGINAL start, not the UTC copy. A weekly
+                # 09:00 Berlin standup expanded in UTC is pinned to 07:00Z,
+                # which becomes 08:00 the moment the clocks go back — every
+                # recurring event on the wall an hour wrong for half the year.
                 occurrences = self._expand_rrule(
-                    component, dtstart_dt, dtend_dt - dtstart_dt,
+                    component, dtstart if not all_day else dtstart_dt,
+                    dtend_dt - dtstart_dt,
                     window_start, window_end, all_day
                 )
                 for occ_start, occ_end in occurrences:
@@ -256,7 +258,12 @@ class CalDAVPoller:
 
     def _expand_rrule(self, component, dtstart, duration,
                       window_start, window_end, all_day):
-        """Expand a RRULE into individual occurrences within the window."""
+        """Expand a RRULE into occurrences within the window, as UTC.
+
+        ``dtstart`` is the event's own start, in the timezone its DTSTART
+        named — dateutil then applies each rule step in that zone, so an
+        occurrence lands on the same wall clock either side of a DST change.
+        """
         rrule_prop = component.get("RRULE")
         if not rrule_prop:
             return []
@@ -280,6 +287,10 @@ class CalDAVPoller:
             occurrences = []
             for occ in rule.between(ws, we, inc=True):
                 occ_start = occ if occ.tzinfo else occ.replace(tzinfo=tzutc())
+                # Back to UTC for storage, once the recurrence has been walked
+                # in the zone it was written in. Each occurrence picks up the
+                # offset in force on its own date, which is the whole point.
+                occ_start = occ_start.astimezone(tzutc())
                 occ_end = occ_start + duration
                 occurrences.append((occ_start, occ_end))
                 if len(occurrences) >= 200:  # safety limit

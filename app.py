@@ -21,6 +21,7 @@ from flask import (Flask, Response, jsonify, request, send_from_directory,
 import config
 import database
 import feeds
+import localtime
 import widgets
 import prewake
 from caldav_poller import CalDAVPoller
@@ -139,7 +140,10 @@ def _abfall_payload(settings, rows):
     for ev in rows:
         if str(ev.get("calendar_id")) != cal_id:
             continue
-        day = str(ev.get("dtstart", ""))[:10]
+        # The wall's day, not UTC's. A collection entered as a late-evening
+        # appointment rather than an all-day one would otherwise be filed
+        # under tomorrow for anyone east of Greenwich.
+        day = localtime.event_day(ev, settings)
         if not day:
             continue
         match = widgets.match_fraction(ev.get("summary", ""), fractions)
@@ -190,6 +194,26 @@ def transit_search():
             "error": "Die Haltestellensuche ist gerade nicht erreichbar. "
                      "Prüfe die Netzwerkverbindung und versuche es erneut.",
         }), 200
+
+
+@app.route("/api/timezones")
+def list_timezones():
+    """Zones this machine knows, filtered — the settings page picks from it.
+
+    Nearly six hundred of them, so it is a search rather than a dropdown,
+    the same shape as the station and place pickers next to it.
+    """
+    query = (request.args.get("q") or "").strip().lower()
+    zones = localtime.available()
+    if query:
+        needle = query.replace(" ", "_")
+        zones = [z for z in zones if needle in z.lower()]
+    return jsonify({
+        "zones": [{"id": z, "name": z.split("/")[-1].replace("_", " "),
+                   "area": z} for z in zones[:40]],
+        "count": len(zones),
+        "current": localtime.zone_name(),
+    })
 
 
 @app.route("/api/geocode")
@@ -259,6 +283,12 @@ def update_settings():
         database.forget_feed("travel:")
         invalidated = True
     if any(k.startswith("prewake_") for k in filtered):
+        prewake_scheduler.poke()
+
+    # Every cached zone answer is now stale, and the wake plan was computed
+    # in the old one.
+    if "timezone" in filtered:
+        localtime.forget()
         prewake_scheduler.poke()
 
     # A cleared cache has nothing to serve until the refresher runs again, and

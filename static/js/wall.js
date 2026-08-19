@@ -747,7 +747,7 @@ function renderAbfall() {
     var near = $('nearBin'), far = $('farBin');
     if (vis === 'off') { near.hidden = true; far.hidden = true; return; }
 
-    var st = abfallState(new Date());
+    var st = abfallState(wallNow());
     // dynamic shows only inside the banner window; always keeps the next
     // collection date up permanently.
     var show = st && (st.when !== null || vis === 'always');
@@ -1041,7 +1041,7 @@ function renderWall() {
     renderFar();
     renderNear();
     renderWidgets();
-    applyTimeOfDay(new Date());
+    applyTimeOfDay(wallNow());
 }
 
 var lastRenderedMinute = -1;
@@ -1055,10 +1055,33 @@ var lastRenderedMinute = -1;
  */
 function tick() {
     updateClock();
-    var minute = new Date().getMinutes();
+    var minute = wallNow().getMinutes();
     if (minute !== lastRenderedMinute) {
         lastRenderedMinute = minute;
         renderWall();
+    }
+}
+
+/** Now, where the wall is.
+ *
+ *  The clock face already honours the timezone setting, because its
+ *  formatters carry it. Everything that compares *hours* — the time-of-day
+ *  layout, the Abfall banner's window — was reading the browser's own, which
+ *  is the machine's. That is the same clock the setting exists to override:
+ *  a Pi still on the UTC its image shipped with shows the right time and then
+ *  switches to the evening layout two hours late.
+ *
+ *  The returned Date is only ever asked for its calendar fields. Never do
+ *  arithmetic between it and a real instant.
+ */
+function wallNow() {
+    var tz = state.settings.timezone;
+    if (!tz || String(tz).toLowerCase() === 'auto') return new Date();
+    try {
+        var shifted = new Date(new Date().toLocaleString('en-US', { timeZone: tz }));
+        return isNaN(shifted.getTime()) ? new Date() : shifted;
+    } catch (e) {
+        return new Date();          // an unknown zone is not worth a blank wall
     }
 }
 

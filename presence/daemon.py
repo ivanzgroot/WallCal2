@@ -31,6 +31,7 @@ import config                                    # noqa: E402
 import database                                  # noqa: E402
 from presence import runtime                     # noqa: E402
 from presence.panel import PanelController       # noqa: E402
+import localtime                                # noqa: E402
 from presence import ld2410                      # noqa: E402
 
 logger = logging.getLogger("wallcal.presence")
@@ -158,6 +159,10 @@ class Settings:
             g("night_brightness"), config.DEFAULT_NIGHT_BRIGHTNESS)))
 
         self.density_mode = str(g("density_mode") or "auto").lower()
+        # Quiet hours are wall-clock times, so they belong to the wall's
+        # zone rather than the machine's — those differ on any Pi still
+        # running the UTC its image shipped with.
+        self.timezone = str(g("timezone") or "auto")
         self.density_near_cm = _as_int(g("density_near_cm"), 100)
         self.density_far_cm = _as_int(g("density_far_cm"), 140)
         self.density_min_band_cm = _as_int(g("density_min_band_cm"), 80)
@@ -245,7 +250,7 @@ class Settings:
             return True
         start = _parse_hhmm(self.schedule_start, dtime(0, 0))
         end = _parse_hhmm(self.schedule_end, dtime(23, 59))
-        current = (now or datetime.now()).time()
+        current = (now or datetime.now(localtime.zone(self.timezone))).time()
         if start == end:
             return True
         if start < end:

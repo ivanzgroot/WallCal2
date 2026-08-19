@@ -1,0 +1,165 @@
+"""The wall's clock: one zone, chosen in settings, applied everywhere.
+
+Events are cached as UTC. Three consumers used to strip the Z and compare the
+result against a local clock, which in Berlin is an hour out in winter and two
+in summer. The symptoms were not subtle — the anticipatory wake fired two
+hours early and was dark again by the time the meeting began, and the travel
+widget skipped every appointment nearer than the offset while showing ones
+three hours away. Recurring events drifted an hour at every clock change.
+
+Everything here is pinned to real dates around a real DST boundary
+(Germany 2026-10-25), so it cannot pass by accident on a machine that happens
+to sit on UTC.
+"""
+import os
+import pathlib
+import sys
+import tempfile
+from datetime import datetime, timedelta
+
+ROOT = pathlib.Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+tmp = tempfile.mkdtemp()
+os.environ["WALLCAL_DB_PATH"] = os.path.join(tmp, "t.db")
+os.environ["WALLCAL_RUNTIME_DIR"] = os.path.join(tmp, "run")
+
+from dateutil.tz import gettz, tzutc      # noqa: E402
+
+import database                           # noqa: E402
+import localtime                          # noqa: E402
+import prewake                            # noqa: E402
+import widgets                            # noqa: E402
+from caldav_poller import CalDAVPoller    # noqa: E402
+
+database.init_db()
+fails = []
+BERLIN = gettz("Europe/Berlin")
+
+
+def check(label, got, want):
+    ok = got == want
+    print(f"  {'PASS' if ok else 'FAIL'}  {label}: {got!r}" + ("" if ok else f"  (want {want!r})"))
+    if not ok:
+        fails.append(label)
+
+
+def utc_of(local_str, zone="Europe/Berlin"):
+    """A local wall-clock time, as the cache would store it."""
+    at = datetime.fromisoformat(local_str).replace(tzinfo=gettz(zone))
+    return at.astimezone(tzutc()).strftime("%Y-%m-%dT%H:%M:%S")
+
+
+print("Resolving the zone")
+check("a named zone is used", str(localtime.zone("Europe/Berlin")), "Europe/Berlin")
+check("nonsense falls back to the machine, never to UTC",
+      localtime.zone("Not/AZone") is not None, True)
+check("the picker has something to offer", len(localtime.available()) > 100, True)
+
+print("")
+print("Reading a cached event")
+# 07:00 UTC is 09:00 in Berlin in summer, 08:00 in winter — the same stored
+# string has to come back as two different wall clocks.
+summer = {"dtstart": "2026-08-19T07:00:00", "all_day": False}
+winter = {"dtstart": "2026-12-19T07:00:00", "all_day": False}
+berlin = {"timezone": "Europe/Berlin"}
+check("summer: +02:00 applied",
+      localtime.parse_event_start(summer, berlin).strftime("%H:%M"), "09:00")
+check("winter: +01:00 applied",
+      localtime.parse_event_start(winter, berlin).strftime("%H:%M"), "08:00")
+check("the setting is what decides",
+      localtime.parse_event_start(summer, {"timezone": "UTC"}).strftime("%H:%M"), "07:00")
+check("and a different one gives a different answer",
+      localtime.parse_event_start(summer, {"timezone": "Asia/Tokyo"}).strftime("%H:%M"),
+      "16:00")
+
+# An all-day entry is a date, not an instant. Read as one it lands a day early
+# for anyone west of Greenwich.
+allday = {"dtstart": "2026-08-19T00:00:00", "all_day": True}
+check("all-day keeps its date in Berlin",
+      localtime.event_day(allday, berlin), "2026-08-19")
+check("and in New York", localtime.event_day(allday, {"timezone": "America/New_York"}),
+      "2026-08-19")
+
+print("")
+print("Anticipatory wake fires a lead time before the event, not an offset")
+cal = database.add_calendar("Arbeit", "https://example.invalid/dav")
+database.set_many_settings({"prewake_enabled": "true", "prewake_lead_minutes": "35",
+                            "timezone": "Europe/Berlin"})
+database.cache_events(cal, [{
+    "uid": "m1", "summary": "Standup", "dtstart": utc_of("2026-08-20T09:00:00"),
+    "dtend": utc_of("2026-08-20T10:00:00"), "all_day": False, "color": "#00d4aa"}])
+
+settings = database.get_all_settings()
+now = datetime(2026, 8, 20, 6, 0, tzinfo=BERLIN)
+plan = prewake.next_wake(settings, now)
+check("a plan exists", plan is not None, True)
+if plan:
+    start, end, label = plan
+    check("wakes 35 min before the meeting",
+          start.astimezone(BERLIN).strftime("%H:%M"), "08:25")
+    check("and holds past the start",
+          end.astimezone(BERLIN).strftime("%H:%M"), "09:05")
+    check("names it", label, "Standup")
+
+# The window used to have closed before the event it was for.
+check("still planned five minutes before the meeting",
+      prewake.next_wake(settings, datetime(2026, 8, 20, 8, 55, tzinfo=BERLIN)) is not None,
+      True)
+check("gone once it is over",
+      prewake.next_wake(settings, datetime(2026, 8, 20, 9, 30, tzinfo=BERLIN)) is None,
+      True)
+
+print("")
+print("Travel time shows for the appointment you are about to leave for")
+database.set_many_settings({"widget_travel": "dynamic", "home_lat": "49.02",
+                            "home_lon": "12.10", "travel_window_minutes": "90"})
+now = datetime(2026, 8, 20, 8, 0, tzinfo=BERLIN)
+for label, at, want in [("in 30 min", "2026-08-20T08:30:00", True),
+                        ("in 60 min", "2026-08-20T09:00:00", True),
+                        ("in 3 hours", "2026-08-20T11:00:00", False)]:
+    database.cache_events(cal, [{
+        "uid": "t", "summary": "Termin", "location": "Domplatz 1, Regensburg",
+        "dtstart": utc_of(at), "dtend": utc_of(at), "all_day": False,
+        "color": "#00d4aa"}])
+    settings = database.get_all_settings()
+    event = widgets._next_event_with_location(settings, now)
+    minutes = None
+    if event:
+        minutes = (widgets._parse_event_start(event, settings) - now).total_seconds() / 60
+    inside = minutes is not None and 0 <= minutes <= 90
+    check(f"{label}: inside the 90 min window", inside, want)
+
+print("")
+print("Recurring events hold their wall clock across a DST change")
+
+
+class Obj:
+    data = b"""BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//wallcal test//
+BEGIN:VEVENT
+UID:weekly-standup
+SUMMARY:Standup
+DTSTART;TZID=Europe/Berlin:20261001T090000
+DTEND;TZID=Europe/Berlin:20261001T093000
+RRULE:FREQ=WEEKLY;BYDAY=TH
+END:VEVENT
+END:VCALENDAR
+"""
+
+
+occurrences = CalDAVPoller()._parse_event(
+    Obj(), {"id": cal, "color": "#00d4aa", "name": "Arbeit"},
+    datetime(2026, 10, 1, tzinfo=tzutc()), datetime(2026, 11, 15, tzinfo=tzutc()))
+shown = [datetime.fromisoformat(ev["dtstart"]).replace(tzinfo=tzutc())
+         .astimezone(BERLIN) for ev in occurrences]
+check("several weeks expanded", len(shown) >= 6, True)
+check("every one of them reads 09:00",
+      sorted({at.strftime("%H:%M") for at in shown}), ["09:00"])
+# The offset in the stored value has to move, which is the actual mechanism.
+stored = {ev["dtstart"][11:16] for ev in occurrences}
+check("by storing two different UTC times", sorted(stored), ["07:00", "08:00"])
+
+print("")
+print("ALL PASS" if not fails else f"FAILED: {fails}")
+sys.exit(1 if fails else 0)

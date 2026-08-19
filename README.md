@@ -148,6 +148,7 @@ seconds without restarting anything.
 | **Confirm delay** | Presence must hold this long before waking — filters single-frame radar glitches. |
 | **Dim before off** | The panel drops to a dim level for a while before going dark, so you get a chance to move and cancel it. Set the duration to 0 to switch off outright. |
 | **Nah/Fern-Modus** | Every value names the layout you get: `auto` switches by distance when the usable band is wide enough, `on` always switches, `near` and `far` pin one layout. (`off` is the old spelling of `near` and still works.) |
+| **Zeitzone** | The clock, event times, quiet hours, the ÖPNV windows and the Abfall banner all read from this one setting. `auto` follows the Pi's own zone — worth naming explicitly, since several Pi OS images ship set to UTC. |
 | **Quiet hours** | A window in which the display behaves normally. **Night mode** decides what happens outside it: nothing (`off`), presence wakes a dim clock only (`dim clock`), or the panel never wakes at all (`never wake`). |
 
 When the sensor is on UART, WallCal also programs the threshold into the
@@ -431,6 +432,7 @@ config.py               Defaults, all overridable via WALLCAL_* env vars
 feeds.py                Transit, weather and travel-time providers
 widgets.py              Widget visibility rules, shaping, and feed refresh
 prewake.py              Anticipatory wake: publishes the next wake window
+localtime.py            The wall's timezone, and reading cached events in it
 presence/
   ld2410.py             HLK-LD2410C UART protocol driver
   display.py            Display power backends with autodetection
@@ -576,4 +578,5 @@ Everything is also reachable from the command line:
 | `GET /api/qr.svg` | The companion QR code |
 | `GET /api/transit/search?q=` | Station search |
 | `GET /api/geocode?q=` | Place search for the location pickers |
+| `GET /api/timezones?q=` | Zone search for the timezone picker |
 | `GET/POST /api/settings` | Read and write settings |

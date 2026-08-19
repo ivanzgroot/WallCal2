@@ -262,6 +262,7 @@ function applySettings(data) {
     qsa('[data-seg]').forEach(function (h) { paintSegment(h.getAttribute('data-seg')); });
     Object.keys(EDITORS).forEach(function (k) { EDITORS[k].render(); });
     syncDensityPair();
+    updateTimezoneHint();
     updateDensityExplanation();
     updateOverlayHint();
     revealWidgetConfig();
@@ -472,6 +473,37 @@ function updateDensityExplanation() {
                   : 'Zu schmal, daher inaktiv — die Wand bleibt in der Nahansicht.');
     }
     el.textContent = text;
+}
+
+/** What time it actually is in the chosen zone.
+ *
+ *  A timezone is the one setting whose effect you cannot see from its own
+ *  name: "Europe/Berlin" and "Europe/London" look equally plausible, and the
+ *  wall is in another room. Showing the clock closes that loop here.
+ */
+function updateTimezoneHint() {
+    var el = $('tzNow');
+    if (!el) return;
+    var chosen = String(state.settings.timezone || 'auto');
+    var explicit = chosen && chosen.toLowerCase() !== 'auto';
+    try {
+        var opts = { hour: '2-digit', minute: '2-digit' };
+        if (explicit) opts.timeZone = chosen;
+        var clock = new Intl.DateTimeFormat(state.settings.locale || 'de-DE', opts)
+            .format(new Date());
+        var named = chosen;
+        if (!explicit) {
+            named = 'Gerät';
+            try {
+                named = new Intl.DateTimeFormat().resolvedOptions().timeZone || 'Gerät';
+            } catch (e) {}
+        }
+        el.textContent = 'Dort ist es jetzt ' + clock + ' (' + named + ').';
+    } catch (e) {
+        // Intl throws on a zone it does not know, which is the clearest
+        // possible signal that the name is wrong.
+        el.textContent = 'Unbekannte Zeitzone — die Wand nutzt die des Geräts.';
+    }
 }
 
 function updateOverlayHint() {
@@ -1502,21 +1534,39 @@ function init() {
     // --- Pickers ---
     wireSearch('stationSearch', 'stationResults', '/api/transit/search?q=',
         function (pick) {
-            save('transit_station_id', pick.id);
-            save('transit_station_name', pick.name);
+            saveMany({ transit_station_id: pick.id, transit_station_name: pick.name });
         },
         function (host, data, onPick) { renderPicks(host, data.stations || [], onPick); });
 
     wireSearch('weatherSearch', 'weatherResults', '/api/geocode?q=',
         function (pick) {
-            save('weather_lat', pick.lat); save('weather_lon', pick.lon);
-            save('weather_place', pick.name);
+            saveMany({ weather_lat: pick.lat, weather_lon: pick.lon,
+                       weather_place: pick.name });
         },
         function (host, data, onPick) { renderPicks(host, data.places || [], onPick); });
 
     wireSearch('homeSearch', 'homeResults', '/api/geocode?q=',
-        function (pick) { save('home_lat', pick.lat); save('home_lon', pick.lon); },
+        function (pick) { saveMany({ home_lat: pick.lat, home_lon: pick.lon }); },
         function (host, data, onPick) { renderPicks(host, data.places || [], onPick); });
+
+    // Six hundred zones is a search, not a dropdown. Picking one shows the
+    // clock in it straight away, so a wrong guess is obvious here rather
+    // than tomorrow morning on the wall.
+    wireSearch('tzSearch', 'tzResults', '/api/timezones?q=',
+        function (pick) {
+            save('timezone', pick.id);
+            $('tzSearch').value = '';
+            updateTimezoneHint();
+        },
+        function (host, data, onPick) { renderPicks(host, data.zones || [], onPick); });
+
+    var tzAuto = $('tzAuto');
+    if (tzAuto) tzAuto.addEventListener('click', function () {
+        save('timezone', 'auto');
+        $('tzSearch').value = '';
+        $('tzResults').innerHTML = '';
+        updateTimezoneHint();
+    });
 
     // --- Manual override ---
     qsa('#overrideSeg button').forEach(function (b) {
