@@ -15,42 +15,81 @@ back to the project's data directory.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import tempfile
 import time
 
+logger = logging.getLogger("wallcal.runtime")
+
 _FALLBACK_SUBDIR = "run"
 _runtime_dir_cache: str | None = None
+_runtime_dir_preferred = False
+_last_upgrade_check = 0.0
+
+#: How often a process sitting on a fallback re-checks whether the preferred
+#: directory has turned up. Both services can start before systemd has
+#: created /run/wallcal, and the one that loses the race used to keep its
+#: fallback for its entire lifetime — so the daemon wrote to /run/wallcal
+#: while the web app read data/run/ and reported the daemon dead, for days,
+#: with "sensor not detected" as the only symptom. The daemon already
+#: re-probes display backends for exactly this reason.
+UPGRADE_INTERVAL = 30.0
 
 
-def runtime_dir() -> str:
-    """Directory holding the IPC files, created on first use."""
-    global _runtime_dir_cache
-    if _runtime_dir_cache and os.path.isdir(_runtime_dir_cache):
-        return _runtime_dir_cache
-
-    candidates = [os.environ.get("WALLCAL_RUNTIME_DIR"), "/run/wallcal"]
+def _candidates() -> list:
+    out = [os.environ.get("WALLCAL_RUNTIME_DIR"), "/run/wallcal"]
     try:
         import config
-        candidates.append(os.path.join(config.DATA_DIR, _FALLBACK_SUBDIR))
+        out.append(os.path.join(config.DATA_DIR, _FALLBACK_SUBDIR))
     except Exception:
-        candidates.append(os.path.join(
+        out.append(os.path.join(
             os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
             "data", _FALLBACK_SUBDIR,
         ))
+    return [c for c in out if c]
 
-    for candidate in candidates:
-        if not candidate:
+
+def _usable(path: str) -> bool:
+    """Can this process actually write here? Ownership decides, not existence."""
+    try:
+        os.makedirs(path, exist_ok=True)
+        probe = os.path.join(path, ".write-test")
+        with open(probe, "w") as fh:
+            fh.write("1")
+        os.unlink(probe)
+        return True
+    except OSError:
+        return False
+
+
+def runtime_dir() -> str:
+    """Directory holding the IPC files, created on first use.
+
+    A process on a fallback keeps re-checking the preferred directory and
+    upgrades itself once it appears, rather than deciding at startup and
+    living with it. Both sides of the IPC therefore converge on the same
+    place within UPGRADE_INTERVAL, whatever order the services came up in.
+    """
+    global _runtime_dir_cache, _runtime_dir_preferred, _last_upgrade_check
+
+    if _runtime_dir_cache and os.path.isdir(_runtime_dir_cache):
+        if _runtime_dir_preferred:
+            return _runtime_dir_cache
+        now = time.monotonic()
+        if now - _last_upgrade_check < UPGRADE_INTERVAL:
+            return _runtime_dir_cache
+        _last_upgrade_check = now
+
+    options = _candidates()
+    for index, candidate in enumerate(options):
+        if not _usable(candidate):
             continue
-        try:
-            os.makedirs(candidate, exist_ok=True)
-            probe = os.path.join(candidate, ".write-test")
-            with open(probe, "w") as fh:
-                fh.write("1")
-            os.unlink(probe)
-        except OSError:
-            continue
+        if candidate != _runtime_dir_cache and _runtime_dir_cache is not None:
+            logger.warning("Runtime directory moved: %s -> %s",
+                           _runtime_dir_cache, candidate)
         _runtime_dir_cache = candidate
+        _runtime_dir_preferred = index == 0
         return candidate
 
     return tempfile.gettempdir()

@@ -963,6 +963,11 @@ def get_status():
         # Per-feed freshness, so a widget quietly serving week-old data is
         # visible to status and doctor even though the wall never says so.
         "feeds": database.feed_freshness(),
+        # Which directory this process is doing IPC in. If the daemon reports
+        # itself dead while `wallcal.sh status` says it is running, the two
+        # are reading different files — and without this there is nothing to
+        # see, because every service is genuinely healthy.
+        "runtime_dir": presence_runtime.runtime_dir(),
     })
 
 

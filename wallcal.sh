@@ -1741,6 +1741,46 @@ for f in database.feed_freshness():
   done <<<"$rows"
 }
 
+# ---------------------------------------------------------------------------
+# The two services talk through JSON files in one directory. They resolve it
+# independently, and a process that cannot write the preferred one falls back
+# to data/run/. If they land in different places every service reports
+# healthy while the web app insists the daemon is dead — which presents only
+# as "sensor not detected" in the UI, and cost a real afternoon to find.
+# ---------------------------------------------------------------------------
+doctor_runtime_dir() {
+  title "Presence IPC"
+
+  local web_dir
+  web_dir="$(curl -fsS --max-time 3 "$(app_url)api/status" 2>/dev/null \
+             | py -c "import json,sys; print(json.load(sys.stdin).get('runtime_dir',''))" 2>/dev/null || true)"
+
+  local stale="$APP_DIR/data/run/presence.json"
+  if [[ -d /run/wallcal ]]; then
+    chk ok "/run/wallcal exists ($(stat -c '%U:%G %a' /run/wallcal 2>/dev/null))"
+  else
+    chk warn "/run/wallcal is missing" \
+      "the services fall back to data/run/, which works but writes to the SD card" \
+      "start the services and it is recreated: ./wallcal.sh restart"
+  fi
+
+  if [[ -n "$web_dir" ]]; then
+    if [[ "$web_dir" == "/run/wallcal" || ! -d /run/wallcal ]]; then
+      chk ok "web app is using $web_dir"
+    else
+      chk fail "web app is using $web_dir, not /run/wallcal" \
+        "the daemon writes to /run/wallcal, so the web app cannot see it and reports it offline" \
+        "./wallcal.sh restart"
+    fi
+  fi
+
+  if [[ -f "$stale" && -d /run/wallcal && "$web_dir" == "/run/wallcal" ]]; then
+    chk warn "a leftover $stale is on disk" \
+      "harmless now, but it is what a split IPC directory leaves behind" \
+      "rm $stale"
+  fi
+}
+
 cmd_doctor() {
   while (( $# )); do
     case "$1" in
@@ -1969,6 +2009,7 @@ else:
     chk warn "kiosk not running" "" "./wallcal.sh kiosk start"
   fi
   doctor_feeds
+  doctor_runtime_dir
 
   if have chromium-browser || have chromium; then
     chk ok "chromium installed"
