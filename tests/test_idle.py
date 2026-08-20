@@ -175,5 +175,52 @@ check("a healthy one does not",
       ctx.eval("document.getElementById('app').getAttribute('data-stale')"), "0")
 
 print("")
+print("Changing the view actually changes the view")
+# near_view reached the wall once at load and never again, so switching
+# between Monat, zwei Wochen and Liste in settings did nothing at all until
+# the kiosk browser was restarted. Nothing here could see that: the suites
+# checked the timers, not what got drawn.
+
+
+def view(name):
+    """Load the wall with a near_view and report what calGrid became."""
+    ctx = MiniRacer()
+    ctx.eval((ROOT / "tests" / "domshim.js").read_text(encoding="utf-8"))
+    ctx.eval("__routes = " + json.dumps({
+        "/api/settings": {"theme": "dark", "near_view": name},
+        "/events": EVENTS, "/api/widgets": WIDGETS,
+        "/api/presence/live": {"daemon_running": True, "density": "near",
+                               "display_on": True, "display_mode": "normal",
+                               "brightness": 100, "brightness_source": "css",
+                               "screensaver": {}},
+    }) + ";")
+    ctx.eval((ROOT / "static" / "js" / "wall.js").read_text(encoding="utf-8"))
+    return ctx, ctx.eval("document.getElementById('calGrid').className"), \
+        ctx.eval("document.getElementById('calGrid').children.length")
+
+
+_, fortnight_cls, fortnight_cells = view("fortnight")
+_, month_cls, month_cells = view("month")
+_, agenda_cls, agenda_cells = view("agenda")
+print(f"      fortnight: {fortnight_cls!r} {fortnight_cells} cells")
+print(f"      month:     {month_cls!r} {month_cells} cells")
+print(f"      agenda:    {agenda_cls!r} {agenda_cells} rows")
+check("fortnight lays out two rows", "rows-2" in fortnight_cls, True)
+check("and draws a fortnight of them", fortnight_cells, 14)
+check("month lays out six", "rows-6" in month_cls, True)
+check("and draws more than a fortnight", month_cells > 14, True)
+check("agenda is neither", "rows-" not in agenda_cls, True)
+
+# The live path: change the setting on the server and let the wall notice,
+# without reloading it.
+ctx, _, _ = view("fortnight")
+ctx.eval("__routes['/api/settings'] = " + json.dumps(
+    {"theme": "dark", "near_view": "month"}) + ";")
+ctx.eval("__tick(20000);")          # the settings re-read
+ctx.eval("__tick(1000);")           # ...and the clock that runs beside it
+check("a changed setting is picked up without a restart",
+      "rows-6" in ctx.eval("document.getElementById('calGrid').className"), True)
+
+print("")
 print("ALL PASS" if not fails else f"FAILED: {fails}")
 sys.exit(1 if fails else 0)

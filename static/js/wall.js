@@ -1191,6 +1191,10 @@ function fetchSettings() {
         if (snapshot !== lastSettings) {
             lastSettings = snapshot;
             fmt = null;                 // locale or timezone may have moved
+            // Arm the 1 Hz tick as well as painting now. The immediate call
+            // is the one you see; this is the one that guarantees it, so a
+            // changed view can never sit there waiting for a minute to roll.
+            lastRenderedMinute = -1;
             renderWall();
         }
     });
