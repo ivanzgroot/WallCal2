@@ -501,6 +501,10 @@ input[type="range"].conflict::-moz-range-track { background: var(--alert); }
     border-left-width: 3px;
     border-radius: var(--radius);
 }
+/* display:flex would otherwise beat the UA's [hidden] rule, leaving an empty
+   padded box with an alert-coloured border sitting under the setup card
+   forever. Same guard as .more[data-needs][hidden] above. */
+.override-banner[hidden] { display: none; }
 .override-banner b { font-size: 14.5px; color: var(--type-hi); }
 .override-banner span { flex: 1 1 auto; font-size: 13px; color: var(--type-lo); }
 .override-banner .btn { flex: none; }
