@@ -187,8 +187,14 @@ def transit_provider(name=None):
     return PROVIDERS.get(str(name), TransitousProvider)()
 
 
-def transit_departures(settings=None):
-    """Cached departures for the configured station, filtered and shaped."""
+def transit_departures(settings=None, allow_fetch=True):
+    """Cached departures for the configured station, filtered and shaped.
+
+    The filtering and the count live here, on the far side of the cache: the
+    cache holds whatever the provider returned, and every caller wants it cut
+    down the same way. A caller that reads the cache row itself gets the raw
+    twelve, which is how the count setting came to do nothing at all.
+    """
     settings = settings or database.get_all_settings()
     station = (settings.get("transit_station_id") or "").strip()
     if not station:
@@ -197,7 +203,7 @@ def transit_departures(settings=None):
     ttl = _int(settings.get("transit_refresh_seconds"), 60)
     provider = transit_provider(settings.get("transit_provider"))
     feed = f"transit:{provider.name}:{station}"
-    entry = cached(feed, ttl, lambda: provider.departures(station))
+    entry = cached(feed, ttl, lambda: provider.departures(station), allow_fetch)
     if not entry:
         return None
 

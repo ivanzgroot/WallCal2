@@ -100,6 +100,13 @@ calls.clear()
 body = client.get("/api/widgets").get_json()
 check("still no fetching", calls, [])
 check("transit slot present", body["transit"]["slot"], "transit")
+# The count and the line filters live behind the cache, so a caller reading
+# the feed row itself gets the provider's raw list and every one of those
+# settings quietly stops working.
+database.set_setting("transit_count", "2")
+capped = client.get("/api/widgets").get_json()["transit"]
+check("the departure count is honoured from cache too",
+      len(capped["departures"]) <= 2, True)
 check("station carried through", body["transit"].get("station"), "Regensburg Hbf")
 # Every widget, not just the one whose fallback was written by hand. Weather
 # and travel used to gate the whole provider call on allow_fetch, so moving

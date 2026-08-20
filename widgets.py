@@ -144,11 +144,10 @@ def _transit(settings, allow_fetch, now):
     if not allow_fetch and not database.get_feed_any_transit(settings):
         return slot
 
-    data = feeds.transit_departures(settings) if allow_fetch else None
-    if data is None:
-        cached = database.get_feed(_transit_feed_name(settings))
-        data = {"departures": (cached or {}).get("payload") or [],
-                "meta": cached} if cached else None
+    # One path, fetching or not. The hand-rolled fallback that used to sit
+    # here read the feed row directly and handed back the provider's raw
+    # list, so the count and the line filters were simply never applied.
+    data = feeds.transit_departures(settings, allow_fetch)
     if not data:
         return slot
 

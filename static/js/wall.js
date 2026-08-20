@@ -949,7 +949,7 @@ var lastDisplayOn = null;
 //
 // The stream is never stopped — it is how we learn the panel is back.
 // ===============================================================
-var timers = { clock: null, events: null, widgets: null, sync: null };
+var timers = { clock: null, settings: null, events: null, widgets: null, sync: null };
 var timersRunning = false;
 
 function startTimers() {
@@ -961,9 +961,11 @@ function startTimers() {
     // for the minute to roll.
     lastRenderedMinute = -1;
     updateClock();
+    fetchSettings();
     fetchWidgets();
 
     timers.clock = setInterval(tick, 1000);
+    timers.settings = setInterval(fetchSettings, 20000);
     timers.events = setInterval(fetchEvents, 5 * 60 * 1000);
     timers.widgets = setInterval(fetchWidgets, 30000);
     timers.sync = setInterval(updateSyncStatus, 60000);
@@ -1169,6 +1171,8 @@ function updateSyncStatus() {
     markStale(age > num(state.settings.poll_interval_minutes, 5) * 3);
 }
 
+var lastSettings = null;
+
 function fetchSettings() {
     apiGet('/api/settings', function(err, data) {
         if (err) return;
@@ -1177,6 +1181,18 @@ function fetchSettings() {
         document.body.setAttribute('data-animations',
             data.animations_enabled === 'true' ? 'on' : 'off');
         applyWallSettings(data);
+
+        // Anything only the browser acts on — the near view, the locale, the
+        // timezone, the time-of-day windows — reached the wall once at load
+        // and never again. Changing the view in settings therefore did
+        // nothing at all until somebody restarted the kiosk browser, on a
+        // page whose whole promise is that changes apply live.
+        var snapshot = JSON.stringify(data);
+        if (snapshot !== lastSettings) {
+            lastSettings = snapshot;
+            fmt = null;                 // locale or timezone may have moved
+            renderWall();
+        }
     });
 }
 
