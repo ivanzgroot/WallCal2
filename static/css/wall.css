@@ -408,7 +408,17 @@
    Every slot keeps its grid row whether or not it is filled, so a
    widget appearing or withdrawing never moves the ones around it.
    ================================================================ */
-.rail { display: grid; grid-template-rows: auto 1fr auto auto auto; gap: 1.6vh; }
+/* The agenda row takes the slack, but never gives up its own content: a
+   plain 1fr is "whatever is left after the others", and .box's min-height:0
+   lets it shrink past its text. With the widgets empty that was invisible —
+   the row had the whole column. Once weather and ÖPNV actually render, the
+   one thing the wall exists to show was squeezed until "Als nächstes" was
+   barely legible. min-content is the floor; the slack is still its own. */
+.rail {
+    display: grid;
+    grid-template-rows: auto minmax(min-content, 1fr) auto auto auto;
+    gap: 1.6vh;
+}
 .rail-gap { min-height: 1vh; }
 .slot { min-height: 0; }
 .slot[hidden] { display: block; visibility: hidden; }

@@ -43,10 +43,22 @@ def check(label, got, want):
         fails.append(label)
 
 
-def utc_of(local_str, zone="Europe/Berlin"):
-    """A local wall-clock time, as the cache would store it."""
-    at = datetime.fromisoformat(local_str).replace(tzinfo=gettz(zone))
+#: Tomorrow, here. The cache query filters against the real clock, so an
+#: event pinned to a fixed date drops out of the window as that date passes —
+#: a test that passes in the morning and fails after lunch. The times below
+#: are fixed; only the day rides along.
+DAY = (datetime.now(BERLIN) + timedelta(days=1)).strftime("%Y-%m-%d")
+
+
+def utc_of(clock, zone="Europe/Berlin"):
+    """A local wall-clock time tomorrow, as the cache would store it."""
+    at = datetime.fromisoformat(f"{DAY}T{clock}").replace(tzinfo=gettz(zone))
     return at.astimezone(tzutc()).strftime("%Y-%m-%dT%H:%M:%S")
+
+
+def local_at(clock):
+    """The same instant, as an aware local datetime, for use as `now`."""
+    return datetime.fromisoformat(f"{DAY}T{clock}").replace(tzinfo=BERLIN)
 
 
 print("Resolving the zone")
@@ -86,11 +98,11 @@ cal = database.add_calendar("Arbeit", "https://example.invalid/dav")
 database.set_many_settings({"prewake_enabled": "true", "prewake_lead_minutes": "35",
                             "timezone": "Europe/Berlin"})
 database.cache_events(cal, [{
-    "uid": "m1", "summary": "Standup", "dtstart": utc_of("2026-08-20T09:00:00"),
-    "dtend": utc_of("2026-08-20T10:00:00"), "all_day": False, "color": "#00d4aa"}])
+    "uid": "m1", "summary": "Standup", "dtstart": utc_of("09:00:00"),
+    "dtend": utc_of("10:00:00"), "all_day": False, "color": "#00d4aa"}])
 
 settings = database.get_all_settings()
-now = datetime(2026, 8, 20, 6, 0, tzinfo=BERLIN)
+now = local_at("06:00:00")
 plan = prewake.next_wake(settings, now)
 check("a plan exists", plan is not None, True)
 if plan:
@@ -103,20 +115,18 @@ if plan:
 
 # The window used to have closed before the event it was for.
 check("still planned five minutes before the meeting",
-      prewake.next_wake(settings, datetime(2026, 8, 20, 8, 55, tzinfo=BERLIN)) is not None,
-      True)
+      prewake.next_wake(settings, local_at("08:55:00")) is not None, True)
 check("gone once it is over",
-      prewake.next_wake(settings, datetime(2026, 8, 20, 9, 30, tzinfo=BERLIN)) is None,
-      True)
+      prewake.next_wake(settings, local_at("09:30:00")) is None, True)
 
 print("")
 print("Travel time shows for the appointment you are about to leave for")
 database.set_many_settings({"widget_travel": "dynamic", "home_lat": "49.02",
                             "home_lon": "12.10", "travel_window_minutes": "90"})
-now = datetime(2026, 8, 20, 8, 0, tzinfo=BERLIN)
-for label, at, want in [("in 30 min", "2026-08-20T08:30:00", True),
-                        ("in 60 min", "2026-08-20T09:00:00", True),
-                        ("in 3 hours", "2026-08-20T11:00:00", False)]:
+now = local_at("08:00:00")
+for label, at, want in [("in 30 min", "08:30:00", True),
+                        ("in 60 min", "09:00:00", True),
+                        ("in 3 hours", "11:00:00", False)]:
     database.cache_events(cal, [{
         "uid": "t", "summary": "Termin", "location": "Domplatz 1, Regensburg",
         "dtstart": utc_of(at), "dtend": utc_of(at), "all_day": False,
