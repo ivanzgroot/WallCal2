@@ -135,7 +135,11 @@ body.settings {
 .more .group + .group { border-top: 1px solid var(--border-subtle); }
 
 /* A widget's configuration is pointless while the widget is off. */
-.more[data-needs][hidden] { display: none; }
+/* Anything conditional hides for real. A class that sets display beats the
+   UA's [hidden] rule, which is how an empty bordered box once sat under the
+   setup card forever — so every shape this page hides says so explicitly. */
+.row[hidden], .group[hidden], details.more[hidden],
+.picker[hidden], .editor[hidden] { display: none; }
 
 /* Advanced keeps the different register, and stays shut. */
 #advanced .more.danger-hint > summary { color: var(--alert); font-family: var(--mono); font-size: 14px; }

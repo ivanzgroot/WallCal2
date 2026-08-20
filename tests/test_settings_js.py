@@ -21,7 +21,7 @@ def check(label, got, want):
         fails.append(label)
 
 
-TAG = re.compile(r"<(input|select|textarea|div|span|button|p)\b([^>]*)>", re.I)
+TAG = re.compile(r"<(input|select|textarea|div|span|button|p|details)\b([^>]*)>", re.I)
 ATTR = re.compile(r'([a-zA-Z0-9_:-]+)\s*=\s*"([^"]*)"')
 
 #: Attributes the page reads back off its own controls. Anything else is
@@ -44,7 +44,7 @@ def template_nodes():
         attrs = dict(ATTR.findall(tag.group(2)))
         interesting = ("id" in attrs or "data-setting" in attrs
                        or "data-seg" in attrs or "data-value-for" in attrs
-                       or "data-needs" in attrs)
+                       or "data-when" in attrs)
         if not interesting:
             continue
         node_id = attrs.get("id")
@@ -138,11 +138,64 @@ check("failure is reported", "Konnte nicht übernommen werden" in body, True)
 check("says what to do", "doctor --fix" in body, True)
 
 print("")
-print("Widget config hides while the widget is off")
+print("A control appears only where changing it would do something")
+
+
+def shown(ctx, expr):
+    """Is the element carrying this data-when currently visible?"""
+    return ctx.eval(
+        "(function(){var m=document.querySelectorAll('[data-when]').filter("
+        "function(n){return n.getAttribute('data-when')===%s;});"
+        "return m.length ? !m[0].hidden : 'NO SUCH CONDITION';})()" % json.dumps(expr))
+
+
 ctx = build(routes={"/api/settings": {"widget_transit": "off", "theme": "dark"}})
-check("panel hidden", ctx.eval(
-    "(function(){var n=0;__detailsNodes.forEach(function(d){if(d.getAttribute('data-needs')"
-    "==='widget_transit'&&d.hidden)n++;});return n;})()"), 1)
+check("a widget switched off hides its whole panel",
+      shown(ctx, "widget_transit!=off"), False)
+
+# The case that prompted this: windows describe when a dynamic board appears,
+# so they say nothing at all once it is set to always.
+ctx = build(routes={"/api/settings": {"widget_transit": "dynamic", "theme": "dark"}})
+check("dynamic shows the time windows", shown(ctx, "widget_transit=dynamic"), True)
+ctx = build(routes={"/api/settings": {"widget_transit": "always", "theme": "dark"}})
+check("always hides them", shown(ctx, "widget_transit=dynamic"), False)
+check("but keeps the panel", shown(ctx, "widget_transit!=off"), True)
+
+print("")
+print("Every operator the page relies on")
+ctx = build(routes={"/api/settings": {
+    "density_mode": "near", "night_mode": "dim_clock", "dim_seconds": "20",
+    "display_off_strategy": "pwm,hdmi", "prewake_enabled": "false",
+    "sensor_mode": "uart", "theme": "dark"}})
+check("=  a pinned layout hides the thresholds",
+      shown(ctx, "density_mode=auto|on"), False)
+check("=  and the near view it will never draw",
+      shown(ctx, "density_mode!=far"), True)
+check("=  night brightness follows dim_clock",
+      shown(ctx, "night_mode=dim_clock"), True)
+check("!= quiet hours need a night mode", shown(ctx, "night_mode!=off"), True)
+check("~  pwm is in the strategy, so its block shows",
+      shown(ctx, "display_off_strategy~pwm"), True)
+check("~  and none is not, so the screensaver hides",
+      shown(ctx, "display_off_strategy~none"), False)
+check("!= a dim level needs a dim to happen in",
+      shown(ctx, "dim_seconds!=0"), True)
+check("two terms: both must hold",
+      shown(ctx, "prewake_enabled=true prewake_timed_only=false"), False)
+check("uart mode hides the GPIO pin", shown(ctx, "sensor_mode=gpio|auto"), False)
+check("and shows the port", shown(ctx, "sensor_mode=uart|auto"), True)
+
+print("")
+print("It keeps up as you change things")
+ctx = build(routes={"/api/settings": {"prewake_enabled": "false", "theme": "dark"}})
+check("nothing under a switch that is off",
+      shown(ctx, "prewake_enabled=true"), False)
+ctx.eval("(function(){var n=document.getElementById('setPrewake');"
+         "n.checked=true; __fire(n,'change');})()")
+check("turning it on reveals its settings, without a reload",
+      shown(ctx, "prewake_enabled=true"), True)
+check("and the day-time field stays hidden behind its own condition",
+      shown(ctx, "prewake_enabled=true prewake_timed_only=false"), False)
 
 
 def posts(ctx, url):

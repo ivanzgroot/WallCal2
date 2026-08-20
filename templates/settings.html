@@ -67,39 +67,7 @@
             </div>
         </details>
 
-        <details class="more">
-            <summary>Abfallkalender</summary>
-            <div class="more-body">
-                <div class="row">
-                    <div class="row-head"><label for="setAbfallCal">Welcher Kalender</label>
-                        <span class="value" data-value-for="abfall_calendar_id">—</span></div>
-                    <p class="desc">Erscheint nicht im Terminplan, sondern als eigenes Banner.</p>
-                    <div class="control"><select id="setAbfallCal" data-setting="abfall_calendar_id"></select></div>
-                </div>
-                <div class="row">
-                    <div class="row-head"><label for="setAbfallFrom">Banner ab (Vortag)</label>
-                        <span class="value" data-value-for="abfall_from_hour">—</span></div>
-                    <p class="desc">Ab dieser Uhrzeit am Tag davor wird erinnert.</p>
-                    <div class="control"><input type="time" id="setAbfallFrom" data-setting="abfall_from_hour"></div>
-                </div>
-                <div class="row">
-                    <div class="row-head"><label for="setAbfallUntil">Banner bis (Abholtag)</label>
-                        <span class="value" data-value-for="abfall_until_hour">—</span></div>
-                    <p class="desc">Am Abholtag bis zu dieser Uhrzeit sichtbar.</p>
-                    <div class="control"><input type="time" id="setAbfallUntil" data-setting="abfall_until_hour"></div>
-                </div>
-                <div class="row">
-                    <div class="row-head"><span class="name">Fraktionen</span>
-                        <span class="value" data-value-for="abfall_fractions">—</span></div>
-                    <p class="desc">Jede Kommune benennt die Tonnen anders. Steht der Suchbegriff
-                       im Titel des Termins, erscheint das Banner in dieser Farbe.</p>
-                    <div class="control">
-                        <div class="editor" id="fractionEditor"></div>
-                        <button class="btn ghost" id="fractionAdd" type="button">Fraktion hinzufügen</button>
-                    </div>
-                </div>
-            </div>
-        </details>
+        
     </section>
 
     <!-- ============================================================ -->
@@ -137,7 +105,41 @@
 
         <!-- Configuration only appears once the widget is switched on: there
              is no point asking for a station from someone who has ÖPNV off. -->
-        <details class="more" data-needs="widget_transit">
+<details class="more" data-when="widget_abfall!=off">
+            <summary>Abfall einrichten</summary>
+            <div class="more-body">
+                <div class="row">
+                    <div class="row-head"><label for="setAbfallCal">Welcher Kalender</label>
+                        <span class="value" data-value-for="abfall_calendar_id">—</span></div>
+                    <p class="desc">Erscheint nicht im Terminplan, sondern als eigenes Banner.</p>
+                    <div class="control"><select id="setAbfallCal" data-setting="abfall_calendar_id"></select></div>
+                </div>
+                <div class="row" data-when="widget_abfall=dynamic">
+                    <div class="row-head"><label for="setAbfallFrom">Banner ab (Vortag)</label>
+                        <span class="value" data-value-for="abfall_from_hour">—</span></div>
+                    <p class="desc">Ab dieser Uhrzeit am Tag davor wird erinnert.</p>
+                    <div class="control"><input type="time" id="setAbfallFrom" data-setting="abfall_from_hour"></div>
+                </div>
+                <div class="row" data-when="widget_abfall=dynamic">
+                    <div class="row-head"><label for="setAbfallUntil">Banner bis (Abholtag)</label>
+                        <span class="value" data-value-for="abfall_until_hour">—</span></div>
+                    <p class="desc">Am Abholtag bis zu dieser Uhrzeit sichtbar.</p>
+                    <div class="control"><input type="time" id="setAbfallUntil" data-setting="abfall_until_hour"></div>
+                </div>
+                <div class="row">
+                    <div class="row-head"><span class="name">Fraktionen</span>
+                        <span class="value" data-value-for="abfall_fractions">—</span></div>
+                    <p class="desc">Jede Kommune benennt die Tonnen anders. Steht der Suchbegriff
+                       im Titel des Termins, erscheint das Banner in dieser Farbe.</p>
+                    <div class="control">
+                        <div class="editor" id="fractionEditor"></div>
+                        <button class="btn ghost" id="fractionAdd" type="button">Fraktion hinzufügen</button>
+                    </div>
+                </div>
+            </div>
+        </details>
+
+        <details class="more" data-when="widget_transit!=off">
             <summary>ÖPNV einrichten</summary>
             <div class="more-body">
                 <div class="row">
@@ -156,7 +158,7 @@
                     <div class="control"><input type="range" id="setTransitCount" min="1" max="8" step="1"
                            data-setting="transit_count"></div>
                 </div>
-                <div class="row">
+                <div class="row" data-when="widget_transit=dynamic">
                     <div class="row-head"><span class="name">Zeitfenster</span>
                         <span class="value" data-value-for="transit_windows">—</span></div>
                     <p class="desc">Wann die Tafel im Modus „Dynamisch“ zu sehen ist.
@@ -181,7 +183,7 @@
             </div>
         </details>
 
-        <details class="more" data-needs="widget_weather">
+        <details class="more" data-when="widget_weather!=off">
             <summary>Wetter einrichten</summary>
             <div class="more-body">
                 <div class="row">
@@ -202,7 +204,7 @@
             </div>
         </details>
 
-        <details class="more" data-needs="widget_travel">
+        <details class="more" data-when="widget_travel!=off">
             <summary>Fahrzeit einrichten</summary>
             <div class="more-body">
                 <div class="row">
@@ -214,7 +216,7 @@
                         <div class="results" id="homeResults"></div>
                     </div>
                 </div>
-                <div class="row">
+                <div class="row" data-when="widget_travel=dynamic">
                     <div class="row-head"><label for="setTravelWindow">Vorlauf</label>
                         <span class="value" data-value-for="travel_window_minutes">—</span></div>
                     <p class="desc">So lange vor dem Termin erscheint der Hinweis.</p>
@@ -224,7 +226,7 @@
             </div>
         </details>
 
-        <details class="more" data-needs="widget_qr">
+        <details class="more" data-when="widget_qr!=off">
             <summary>QR-Code einrichten</summary>
             <div class="more-body">
                 <div class="row">
@@ -244,7 +246,7 @@
         <p class="lede">Wie die Wand aussieht.</p>
 
         <div class="group">
-            <div class="row">
+            <div class="row" data-when="density_mode!=far">
                 <div class="row-head"><span class="name">Nahansicht</span>
                     <span class="value" data-value-for="near_view">—</span></div>
                 <p class="desc">Zwei Wochen sind gut lesbar, ein Monat zeigt mehr Zeitraum.</p>
@@ -270,7 +272,7 @@
                     <div class="control seg" data-seg="density_mode"
                          data-options="auto:Automatisch|on:Immer wechseln|near:Nur Nah|far:Nur Fern"></div>
                 </div>
-                <div class="row">
+                <div class="row" data-when="density_mode=auto|on">
                     <div class="row-head"><label for="setEnterMs">Reaktion beim Hinlaufen</label>
                         <span class="value" data-value-for="density_enter_ms">—</span></div>
                     <p class="desc">Wie schnell auf die Nahansicht umgeschaltet wird. Kurz halten —
@@ -278,7 +280,7 @@
                     <div class="control"><input type="range" id="setEnterMs" min="0" max="2000" step="50"
                            data-setting="density_enter_ms" data-unit=" ms"></div>
                 </div>
-                <div class="row">
+                <div class="row" data-when="density_mode=auto|on">
                     <div class="row-head"><label for="setLeaveMs">Geduld beim Weggehen</label>
                         <span class="value" data-value-for="density_debounce_ms">—</span></div>
                     <p class="desc">Wie lange gewartet wird, bevor wieder auf Fernansicht gewechselt wird.
@@ -286,21 +288,21 @@
                     <div class="control"><input type="range" id="setLeaveMs" min="200" max="5000" step="100"
                            data-setting="density_debounce_ms" data-unit=" ms"></div>
                 </div>
-                <div class="row">
+                <div class="row" data-when="density_mode=auto|on">
                     <div class="row-head"><label for="setCrossfade">Überblendung</label>
                         <span class="value" data-value-for="crossfade_ms">—</span></div>
                     <p class="desc">Nie hart schneiden.</p>
                     <div class="control"><input type="range" id="setCrossfade" min="0" max="1200" step="50"
                            data-setting="crossfade_ms" data-unit=" ms"></div>
                 </div>
-                <div class="row">
+                <div class="row" data-when="density_mode=auto|on">
                     <div class="row-head"><label for="setNearCm">Nah ab</label>
                         <span class="value" data-value-for="density_near_cm">—</span></div>
                     <p class="desc">Näher als das zeigt die Wand die Detailansicht — siehe Markierung im Messbalken unter „Präsenz“.</p>
                     <div class="control"><input type="range" id="setNearCm" min="30" max="400" step="10"
                            data-setting="density_near_cm" data-unit=" cm" data-linked="density"></div>
                 </div>
-                <div class="row">
+                <div class="row" data-when="density_mode=auto|on">
                     <div class="row-head"><label for="setFarCm">Wieder fern ab</label>
                         <span class="value" data-value-for="density_far_cm">—</span></div>
                     <p class="desc">Der Abstand dazwischen ist der Totbereich, in dem nichts umschaltet.
@@ -323,21 +325,21 @@
                         <label for="setDrift">Aktiv</label>
                     </div>
                 </div>
-                <div class="row">
+                <div class="row" data-when="display_off_strategy~none">
                     <div class="row-head"><span class="name">Schoner-Stil</span>
                         <span class="value" data-value-for="screensaver_style">—</span></div>
                     <p class="desc">Greift nur, wenn die Abschaltmethode „none“ ist — dann schläft das Panel nie.</p>
                     <div class="control seg" data-seg="screensaver_style"
                          data-options="dim_dashboard:Gedimmt|clock:Nur Uhr|blank:Schwarz"></div>
                 </div>
-                <div class="row">
+                <div class="row" data-when="display_off_strategy~none">
                     <div class="row-head"><label for="setSaverIdle">Wartezeit</label>
                         <span class="value" data-value-for="screensaver_idle_seconds">—</span></div>
                     <p class="desc">So lange nach der letzten Erkennung, bevor der Schoner übernimmt.</p>
                     <div class="control"><input type="range" id="setSaverIdle" min="30" max="900" step="30"
                            data-setting="screensaver_idle_seconds" data-unit=" s"></div>
                 </div>
-                <div class="row">
+                <div class="row" data-when="display_off_strategy~none">
                     <div class="row-head"><label for="setSaverBright">Helligkeit dabei</label>
                         <span class="value" data-value-for="screensaver_brightness">—</span></div>
                     <p class="desc">Deutlich dunkler als der Normalbetrieb.</p>
@@ -358,13 +360,13 @@
                         <label for="setTod">Einschalten</label>
                     </div>
                 </div>
-                <div class="row">
+                <div class="row" data-when="timeofday_enabled=true">
                     <div class="row-head"><label for="setTodMorning">Morgen bis</label>
                         <span class="value" data-value-for="timeofday_morning_until">—</span></div>
                     <p class="desc">Bis hierhin gilt das Morgen-Layout.</p>
                     <div class="control"><input type="time" id="setTodMorning" data-setting="timeofday_morning_until"></div>
                 </div>
-                <div class="row">
+                <div class="row" data-when="timeofday_enabled=true">
                     <div class="row-head"><label for="setTodEvening">Abend ab</label>
                         <span class="value" data-value-for="timeofday_evening_from">—</span></div>
                     <p class="desc">Ab hier gilt das Abend-Layout.</p>
@@ -484,7 +486,7 @@
                     <div class="control"><input type="range" id="setDimSeconds" min="0" max="120" step="5"
                            data-setting="dim_seconds" data-unit=" s"></div>
                 </div>
-                <div class="row">
+                <div class="row" data-when="dim_seconds!=0">
                     <div class="row-head"><label for="setDimLevel">Helligkeit dabei</label>
                         <span class="value" data-value-for="dim_level">—</span></div>
                     <p class="desc">Auf diesen Wert wird abgedunkelt.</p>
@@ -513,6 +515,15 @@
                            data-setting="sensor_moving_energy_min"></div>
                 </div>
                 <div class="row">
+                    <div class="row-head"><label for="setUseStill">Reglose Person zählt als anwesend</label></div>
+                    <p class="desc">Aus heißt: nur Bewegung weckt. Weniger Fehlalarme, aber die Wand
+                       schläft ein, während du davorstehst und liest.</p>
+                    <div class="control switch">
+                        <input type="checkbox" id="setUseStill" data-setting="sensor_use_stationary" data-bool="1">
+                        <label for="setUseStill">Zählt als anwesend</label>
+                    </div>
+                </div>
+                <div class="row" data-when="sensor_use_stationary=true">
                     <div class="row-head"><label for="setStill">Empfindlichkeit Ruhe</label>
                         <span class="value" data-value-for="sensor_stationary_energy_min">—</span></div>
                     <p class="desc">Für jemanden, der still davorsteht und liest.</p>
@@ -532,19 +543,19 @@
                     <div class="control seg" data-seg="night_mode"
                          data-options="off:Aus|dim_clock:Dunkle Uhr|never_wake:Nie wecken"></div>
                 </div>
-                <div class="row">
+                <div class="row" data-when="night_mode!=off">
                     <div class="row-head"><label for="setSchedStart">Fenster von</label>
                         <span class="value" data-value-for="schedule_start">—</span></div>
                     <p class="desc">Ab hier verhält sich die Wand normal.</p>
                     <div class="control"><input type="time" id="setSchedStart" data-setting="schedule_start"></div>
                 </div>
-                <div class="row">
+                <div class="row" data-when="night_mode!=off">
                     <div class="row-head"><label for="setSchedEnd">Fenster bis</label>
                         <span class="value" data-value-for="schedule_end">—</span></div>
                     <p class="desc">Danach gilt der Nachtmodus.</p>
                     <div class="control"><input type="time" id="setSchedEnd" data-setting="schedule_end"></div>
                 </div>
-                <div class="row">
+                <div class="row" data-when="night_mode=dim_clock">
                     <div class="row-head"><label for="setNightBright">Helligkeit nachts</label>
                         <span class="value" data-value-for="night_brightness">—</span></div>
                     <p class="desc">Für die dunkle Uhr.</p>
@@ -566,14 +577,14 @@
                     </div>
                     <p class="desc" id="prewakeNext"></p>
                 </div>
-                <div class="row">
+                <div class="row" data-when="prewake_enabled=true">
                     <div class="row-head"><label for="setPrewakeLead">Vorlauf</label>
                         <span class="value" data-value-for="prewake_lead_minutes">—</span></div>
                     <p class="desc">So lange vor Terminbeginn.</p>
                     <div class="control"><input type="range" id="setPrewakeLead" min="5" max="120" step="5"
                            data-setting="prewake_lead_minutes" data-unit=" min"></div>
                 </div>
-                <div class="row">
+                <div class="row" data-when="prewake_enabled=true">
                     <div class="row-head"><label for="setPrewakeTimed">Nur Termine mit Uhrzeit</label></div>
                     <p class="desc">Ganztägige Termine haben keine sinnvolle Startzeit — sonst würde um 00:00 geweckt.</p>
                     <div class="control switch">
@@ -581,7 +592,7 @@
                         <label for="setPrewakeTimed">Nur mit Uhrzeit</label>
                     </div>
                 </div>
-                <div class="row">
+                <div class="row" data-when="prewake_enabled=true prewake_timed_only=false">
                     <div class="row-head"><label for="setPrewakeAllday">Ganztägig wecken um</label>
                         <span class="value" data-value-for="prewake_allday_at">—</span></div>
                     <p class="desc">Gilt nur, wenn ganztägige Termine mitzählen.</p>
@@ -658,7 +669,7 @@
                         <div class="control"><div class="picker" id="strategyPicker"></div></div>
                         <p class="consequence" id="strategyNote"></p>
                     </div>
-                    <div class="row">
+                    <div class="row" data-when="display_off_strategy~hdmi">
                         <div class="row-head"><span class="name">Backend</span>
                             <span class="value" data-value-for="display_backend">—</span></div>
                         <p class="desc">Womit der Ausgang geschaltet wird. „Automatisch“ nimmt das beste
@@ -671,7 +682,7 @@
                     </div>
                 </div>
 
-                <div class="group">
+                <div class="group" data-when="display_off_strategy~pwm">
                     <h3>PWM-Hintergrundbeleuchtung</h3>
                     <div class="row">
                         <div class="row-head"><label for="setPwmGpio">pwm_gpio</label>
@@ -733,20 +744,20 @@
                         <div class="control seg" data-seg="sensor_mode"
                              data-options="auto:auto|uart:uart|gpio:gpio|none:none"></div>
                     </div>
-                    <div class="row">
+                    <div class="row" data-when="sensor_mode=gpio|auto">
                         <div class="row-head"><label for="setSensorPin">sensor_gpio_pin</label>
                             <span class="value" data-value-for="sensor_gpio_pin">—</span></div>
                         <p class="desc">OUT-Pin, nur im GPIO-Modus benutzt.</p>
                         <div class="control"><input type="number" id="setSensorPin" data-setting="sensor_gpio_pin" min="0" max="27"></div>
                         <p class="consequence" id="pinConflict"></p>
                     </div>
-                    <div class="row">
+                    <div class="row" data-when="sensor_mode=uart|auto">
                         <div class="row-head"><label for="setUartPort">sensor_uart_port</label>
                             <span class="value" data-value-for="sensor_uart_port">—</span></div>
                         <p class="desc"><code>auto</code> oder ein Gerätepfad.</p>
                         <div class="control"><input type="text" id="setUartPort" data-setting="sensor_uart_port"></div>
                     </div>
-                    <div class="row">
+                    <div class="row" data-when="sensor_mode=uart|auto">
                         <div class="row-head"><label for="setUartBaud">sensor_uart_baud</label>
                             <span class="value" data-value-for="sensor_uart_baud">—</span></div>
                         <p class="desc">Werkseinstellung des LD2410C ist 256000.</p>

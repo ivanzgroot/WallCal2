@@ -86,6 +86,15 @@ var document = {
             });
         }
         if (sel.indexOf('.more[data-needs]') === 0) return __detailsNodes;
+        // A bare attribute selector: '[data-when]', '[data-setting]', …
+        var bare = /^\[data-([a-z-]+)\]$/.exec(sel);
+        if (bare) {
+            return Object.keys(__nodes).map(function (k) { return __nodes[k]; })
+                   .filter(function (n) { return n.getAttribute('data-' + bare[1]) !== null; })
+                   .concat(__detailsNodes.filter(function (n) {
+                       return n.getAttribute('data-' + bare[1]) !== null;
+                   }));
+        }
         if (sel.indexOf('[data-setting]') === 0)
             return Object.keys(__nodes).map(function (k) { return __nodes[k]; })
                    .filter(function (n) { return n.getAttribute('data-setting'); });

@@ -62,6 +62,9 @@ function saveMany(changes) {
         state.settings[key] = String(changes[key]);
         showValue(key);
     });
+    // Every write goes through here, so this is the one place that has to
+    // ask whether anything just became relevant — or stopped being.
+    applyConditions();
 
     // One timer per set of keys, so unrelated controls never cancel each
     // other and the same control still coalesces while you drag it.
@@ -226,7 +229,7 @@ function bindSegments() {
             b.addEventListener('click', function () {
                 save(key, bits[0]);
                 paintSegment(key);
-                if (key.indexOf('widget_') === 0) revealWidgetConfig();
+                applyConditions();
                 renderSetup();
             });
             host.appendChild(b);
@@ -265,15 +268,52 @@ function applySettings(data) {
     updateTimezoneHint();
     updateDensityExplanation();
     updateOverlayHint();
-    revealWidgetConfig();
+    applyConditions();
     renderSetup();
 }
 
-/** A widget's configuration is noise while the widget is switched off. */
-function revealWidgetConfig() {
-    qsa('.more[data-needs]').forEach(function (el) {
-        var key = el.getAttribute('data-needs');
-        el.hidden = (state.settings[key] || 'dynamic') === 'off';
+// ---------------------------------------------------------------
+// Show a control only where changing it would do something
+//
+// A settings page that lists everything it can store makes the reader do
+// the work of knowing which parts are live. The ÖPNV time windows mean
+// nothing once the board is set to "Immer"; the night brightness means
+// nothing unless night mode dims; half the PWM block means nothing unless
+// the backlight is wired. Each of those is a fact the page already knows.
+//
+//   data-when="key=value"      one of, with | between alternatives
+//   data-when="key!=value"     anything but
+//   data-when="key~token"      a comma-separated list contains the token
+//
+// Deliberately no numeric comparison: it would need a > inside an attribute
+// value, which is legal HTML and quietly truncates every naive parser that
+// reads this file — including the one the tests use. "!=0" says the same
+// thing about a slider that bottoms out at zero.
+//
+// Several conditions separated by spaces must all hold. One attribute, one
+// evaluator — the same bargain as data-setting.
+// ---------------------------------------------------------------
+var CONDITION = /^([a-z0-9_]+)(!=|=|~)(.*)$/;
+
+function conditionMet(expr) {
+    return String(expr || '').trim().split(/\s+/).every(function (term) {
+        var parts = CONDITION.exec(term);
+        if (!parts) return true;
+        var actual = state.settings[parts[1]];
+        actual = String(actual === undefined || actual === null ? '' : actual);
+        var wanted = parts[3];
+        switch (parts[2]) {
+            case '=':  return wanted.split('|').indexOf(actual) >= 0;
+            case '!=': return wanted.split('|').indexOf(actual) < 0;
+            case '~':  return csvList(actual).indexOf(wanted) >= 0;
+        }
+        return true;
+    });
+}
+
+function applyConditions() {
+    qsa('[data-when]').forEach(function (el) {
+        el.hidden = !conditionMet(el.getAttribute('data-when'));
     });
 }
 
